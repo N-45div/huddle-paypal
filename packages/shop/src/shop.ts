@@ -9,7 +9,7 @@ import {
   MAX_ITEMS,
   parseSignable,
   type Payee,
-  type PayPal,
+  PayPal,
   PayPalError,
   signableId,
   signableText,
@@ -18,8 +18,8 @@ import {
 } from "@huddle/core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { type Catalog, search } from "./catalog.ts";
-import type { Cart, Link, Order, ShopStore } from "./store.ts";
+import { type Catalog, readCatalog, search } from "./catalog.ts";
+import { type Cart, type Link, type Order, ShopStore } from "./store.ts";
 
 export { type Catalog, parseCatalog, type Product, readCatalog, search } from "./catalog.ts";
 export { ShopStore } from "./store.ts";
@@ -408,4 +408,25 @@ export function shopApp(options: ShopOptions): Hono {
   });
 
   return app;
+}
+
+/**
+ * Bean & Leaf inside Huddle's server, for a one-service demo: open when a PayPal app is set up
+ * (PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET), or with HUDDLE_SHOP=on to look around without one; HUDDLE_SHOP=off
+ * keeps it shut. Null when it's shut.
+ */
+export function demoShop(env: NodeJS.ProcessEnv, where: { readonly publicUrl: string; readonly db: string; readonly fetcher?: typeof fetch }): { readonly app: Hono; readonly name: string; readonly paypal: "sandbox" | "live" | null } | null {
+  const setting = env.HUDDLE_SHOP?.trim().toLowerCase();
+  const paypal = PayPal.fromEnv(env, where.fetcher);
+  if (setting === "off" || (!paypal && setting !== "on")) return null;
+  const catalog = readCatalog(env.SHOP_CATALOG?.trim() || new URL("../catalog.json", import.meta.url));
+  const app = shopApp({
+    catalog,
+    store: new ShopStore(where.db),
+    paypal,
+    publicUrl: where.publicUrl,
+    ...(env.SHOP_ADMIN_TOKEN?.trim() ? { adminToken: env.SHOP_ADMIN_TOKEN.trim() } : {}),
+    ...(env.PAYPAL_WEBHOOK_ID?.trim() ? { webhookId: env.PAYPAL_WEBHOOK_ID.trim() } : {}),
+  });
+  return { app, name: catalog.name, paypal: paypal ? (paypal.sandbox ? "sandbox" : "live") : null };
 }

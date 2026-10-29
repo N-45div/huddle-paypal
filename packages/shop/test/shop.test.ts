@@ -3,7 +3,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, it } from "node:test";
 import { type Payment, PayPal, signableText } from "@huddle/core";
 import { parseCatalog, readCatalog, search } from "../src/catalog.ts";
-import { shopApp } from "../src/shop.ts";
+import { demoShop, shopApp } from "../src/shop.ts";
 import { ShopStore } from "../src/store.ts";
 
 const CATALOG = readCatalog(new URL("../catalog.json", import.meta.url));
@@ -323,5 +323,19 @@ describe("PayPal's webhooks", () => {
     assert.equal(taken.body.order.paypal.captureId, "CAPTURE1", "a refund's id isn't the capture's");
     assert.equal((await call("GET", `/orders/${paid.body.order.id}`)).body.order.status, "refunded");
     assert.equal((await shop().call("POST", "/paypal/webhook", event, headers("good"))).status, 503, "no webhook id: not taken");
+  });
+});
+
+describe("Bean & Leaf inside Huddle", () => {
+  const where = { publicUrl: "http://huddle.test/shop", db: ":memory:" };
+  it("opens with a PayPal app set up, or when asked to, and stays shut otherwise", async () => {
+    assert.equal(demoShop({}, where), null);
+    const withPayPal = demoShop({ PAYPAL_CLIENT_ID: "id", PAYPAL_CLIENT_SECRET: "secret" }, where);
+    assert.equal(withPayPal?.paypal, "sandbox");
+    assert.equal(withPayPal?.name, "Bean & Leaf");
+    const card = (await (await withPayPal!.app.request("/")).json()) as { shop: { id: string } };
+    assert.equal(card.shop.id, "huddle.test", "its id is Huddle's host when it runs inside Huddle");
+    assert.equal(demoShop({ HUDDLE_SHOP: "on" }, where)?.paypal, null);
+    assert.equal(demoShop({ HUDDLE_SHOP: "off", PAYPAL_CLIENT_ID: "id", PAYPAL_CLIENT_SECRET: "secret" }, where), null);
   });
 });
