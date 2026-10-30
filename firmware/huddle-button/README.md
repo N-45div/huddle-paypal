@@ -6,6 +6,9 @@ screen, INMP441 mic, MAX98357A speaker amp, one BOOT button) as a gadget for Hud
 - **Something waiting for you:** it shows the approval as one line and says it aloud. Hold the button for a
   second for yes: a bar fills, and letting go says yes. A quick press is no. Yes takes the deliberate
   gesture, so a knock never approves anything.
+- **A payment waiting for you:** it shows the total, who it's to (**NEW** when the board hasn't paid them
+  before) and each line, and says it aloud. Hold for two seconds to sign it with the board's own key; a quick
+  press is no. Only that signature lets the shop charge you (see [Signing payments](#signing-payments)).
 - **Nothing waiting:** it shows today's spend, the next scheduled run, and the flows you've put on the button
   (a flow's trigger: "From my Huddle button"). Tap to pick one; hold and talk to start it with your words.
   With no flows on it, holding and talking asks Huddle's router.
@@ -104,6 +107,30 @@ arduino-cli monitor -p COM5 -c baudrate=115200
    the network in `config.h` and logs its address and signal strength.
 4. **Huddle:** it connects. Then it logs each message from Huddle, what it heard you say, and each answer
    you gave.
+
+## Signing payments
+
+The board signs the payments a flow's Pay step writes, and nothing else.
+
+- **Its own key.** The first time it starts, the board makes a P-256 key with the chip's own entropy source
+  on, before I2S starts, and keeps it in its flash. It says only the public half to Huddle, in hello, and the
+  log prints the key's fingerprint (`signing key 1A2B 3C4D 5E6F 7A8B`). Devices in the canvas shows the same
+  fingerprint, so you can see they match. At each start it signs a test text and checks it with its own
+  public key; a board that fails that check signs nothing.
+- **Kept the first time.** Huddle keeps the key the first time the board says it. If the same board later
+  says another key (new firmware that wiped its flash, or another board with its token), Huddle refuses it,
+  and the idle screen says "key refused". Remove the board in Devices and add it again to trust the new key.
+- **What it shows is what it signs.** The screen reads the shop, each line and the total from the exact text
+  it signs, not from the words sent with it, and the board won't sign a text whose lines don't add up to its
+  total. A shop it hasn't paid before shows as **NEW** in red, so a lookalike stands out.
+- **How it signs.** ECDSA P-256 over the SHA-256 of the text's bytes, deterministic (RFC 6979), r and s side
+  by side, base64url. Huddle checks the signature, and so does the shop, against the key you linked there,
+  before it charges your PayPal.
+- **A two-second hold.** Signing takes twice the hold of a yes; anything shorter declines.
+
+The key sits in the board's flash as plain bytes. Anyone with the board and a USB cable can read flash that
+isn't encrypted, so for real money turn on the ESP32-S3's flash encryption and NVS encryption, or keep the key
+in a secure element like an ATECC608.
 
 ## If something's off
 
