@@ -1,4 +1,4 @@
-import { AUTO, type Change, type Engine, fingerprint, type Flow, keyText, type LogLine, nextRun, type Router, SAMPLE_RATE, sentences, type Signer, type Speech, spokenForm, type Store, turnAt } from "@huddle/core";
+import { amountText, AUTO, type Change, type Engine, fingerprint, type Flow, keyText, type LogLine, nextRun, parseSignable, type Router, SAMPLE_RATE, sentences, type Signable, signableLine, type Signer, type Speech, spokenForm, type Store, turnAt } from "@huddle/core";
 import type { Hono } from "hono";
 import type { UpgradeWebSocket, WSContext } from "hono/ws";
 import { bearerOf, same } from "./auth.ts";
@@ -19,6 +19,22 @@ const finishedIn = (log: readonly LogLine[]): Set<string> => new Set(log.flatMap
 
 /** What the device should show now. */
 export type Screen =
+  /**
+   * Something only the board's signature says yes to: a payment, or linking the board at a shop. `text` is exactly
+   * what it signs; the board shows the facts in it (the shop, each line, the total) from the text itself, never
+   * from `line`, which is for saying aloud and for screens that can't read the text.
+   */
+  | {
+      readonly type: "sign";
+      readonly id: string;
+      readonly kind: "buy" | "link";
+      readonly flow: string;
+      readonly text: string;
+      readonly line: string;
+      readonly expires: string;
+      /** How many more are waiting after this one, payments and approvals. */
+      readonly more: number;
+    }
   | {
       readonly type: "approval";
       readonly id: string;
@@ -57,6 +73,10 @@ export type ToDevice =
       readonly assistant?: Who | null;
     }
   | { readonly type: "answered"; readonly id: string; readonly yes: boolean }
+  /** The board's signature was taken; the run goes on to the shop. */
+  | { readonly type: "signed"; readonly id: string }
+  /** What came of a payment this board signed: paid, or failed with why. */
+  | { readonly type: "payment"; readonly id: string; readonly status: "paid" | "failed"; readonly line: string }
   /** `assistant`: who'll answer (the flow's last assistant step), so the button can show its Huddler. */
   | { readonly type: "started"; readonly runId: string; readonly flow: string; readonly assistant: Who | null }
   /** "Just ask": what Huddle will do with what you said, said out loud too; `team`, who'll do it, in order. */
@@ -171,6 +191,15 @@ interface FromDevice {
   readonly jpeg?: unknown;
   /** "hello": the board's P-256 public key (raw, base64url), when it signs. */
   readonly key?: unknown;
+  /** "sign": the board's signature of the text it was shown (r‖s, base64url). */
+  readonly signature?: unknown;
+}
+
+/** A payment as a sentence to say: shorter than the line the screen shows. */
+function spokenPayment(signable: Signable): string {
+  if (signable.kind === "link") return `Link your PayPal at ${signable.shop.name} to this board`;
+  const count = signable.items.reduce((sum, item) => sum + item.qty, 0);
+  return `Pay ${amountText(signable.total, signable.currency)} to ${signable.shop.name}, ${count} ${count === 1 ? "item" : "items"}`;
 }
 
 export interface DeviceHubOptions {
@@ -202,9 +231,22 @@ export class DeviceHub {
     this.asker = options.planner && options.router ? new Asker(store, engine, options.router, options.planner) : null;
   }
 
-  /** The screen: the oldest approval waiting, else today at a glance. */
+  /** The screen: a payment waiting for the board's signature first, then the oldest approval, else today at a glance. */
   screen(): Screen {
-    const waiting = this.store.waitingApprovals();
+    // A payment's approval is answered by the board's signature, so it's shown as the payment, not as a yes or no.
+    const waiting = this.store.waitingApprovals().filter((approval) => !approval.signs);
+    const signing = this.store.waitingSignRequests();
+    const payment = signing[0];
+    if (payment) {
+      const run = payment.runId ? this.store.run(payment.runId) : null;
+      let line = payment.kind === "link" ? "Link this board at a shop" : "A payment to sign";
+      try {
+        line = signableLine(parseSignable(payment.text));
+      } catch {
+        // Not readable: the board refuses to sign what it can't read, and says so.
+      }
+      return { type: "sign", id: payment.id, kind: payment.kind, flow: run?.flow.name ?? (payment.kind === "link" ? "Link a shop" : "A payment"), text: payment.text, line, expires: payment.expires, more: signing.length - 1 + waiting.length };
+    }
     const first = waiting[0];
     if (first) {
       const run = this.store.run(first.runId);
@@ -333,6 +375,16 @@ export class DeviceHub {
         spokenApproval = screen.id;
         void say(`${screen.flow}. ${screen.line}${screen.warning ? ` Careful: ${screen.warning}.` : ""}`);
       }
+      if (screen.type === "sign" && screen.id !== spokenApproval) {
+        spokenApproval = screen.id;
+        let said = screen.line;
+        try {
+          said = spokenPayment(parseSignable(screen.text));
+        } catch {
+          // Said as the line, then.
+        }
+        void say(`${screen.flow}. ${said}. Hold to sign it, or tap for no.`);
+      }
     };
 
     const finished = new Set<string>();
@@ -354,7 +406,26 @@ export class DeviceHub {
       ours.set(run.id, key);
       send({ type: "working", runId: run.id, assistant: team[0]!, ...(team.length > 1 ? { with: team.slice(1) } : {}) });
     };
+    /** Payments this board signed, until it's told what came of them. */
+    const signedHere = new Set<string>();
+    const tellPayments = () => {
+      for (const id of signedHere) {
+        const request = this.store.signRequest(id);
+        if (!request || (request.status !== "paid" && request.status !== "failed")) continue;
+        signedHere.delete(id);
+        let line = request.status === "failed" ? `It didn't go through: ${request.error ?? "the shop said no"}` : "Paid.";
+        try {
+          const signed = parseSignable(request.text);
+          if (request.status === "paid" && signed.kind === "buy") line = `Paid ${amountText(signed.total, signed.currency)} to ${signed.shop.name} with PayPal.`;
+        } catch {
+          // Said plainly, then.
+        }
+        send({ type: "payment", id, status: request.status, line });
+        void say(line);
+      }
+    };
     const onChange = (change: Change) => {
+      if (change.kind === "sign") tellPayments();
       if (change.kind === "run") {
         tellWorking(change.runId);
         const run = this.store.run(change.runId);
@@ -366,7 +437,7 @@ export class DeviceHub {
           if (answer) void say(answer);
         }
       }
-      if (change.kind === "run" || change.kind === "approval" || change.kind === "flow") show();
+      if (change.kind === "run" || change.kind === "approval" || change.kind === "flow" || change.kind === "sign") show();
     };
 
     /** The device stopped talking: hear it, then start its flow, or ask the router and say the answer. */
@@ -505,6 +576,39 @@ export class DeviceHub {
             }
             show();
             return;
+          case "sign": {
+            // The board's signature of the payment it showed: taken only with the key Huddle holds for this board.
+            if (typeof message.id !== "string" || typeof message.signature !== "string") break;
+            generation++;
+            if (!signer) {
+              send({ type: "error", message: signerProblem ?? "This board hasn't said its key, so it can't sign: update its firmware." });
+              return;
+            }
+            try {
+              this.engine.sign(message.id, message.signature, signer.key);
+              signedHere.add(message.id);
+              send({ type: "signed", id: message.id });
+            } catch (error) {
+              send({ type: "error", message: failure(error) });
+            }
+            show();
+            return;
+          }
+          case "decline": {
+            // No to a payment (or a link), from the board: the run goes to its onNo, or ends as declined.
+            if (typeof message.id !== "string") break;
+            generation++;
+            try {
+              const approval = this.store.approvalForSign(message.id);
+              if (approval) this.engine.answer(approval.id, false);
+              else if (!this.store.moveSignRequest(message.id, "waiting", { status: "declined" })) throw new Error("Nothing is waiting to be signed by that id.");
+              send({ type: "answered", id: message.id, yes: false });
+            } catch (error) {
+              send({ type: "error", message: failure(error) });
+            }
+            show();
+            return;
+          }
           case "start": {
             if (typeof message.flow !== "string") break;
             const said = typeof message.input === "string" ? message.input.slice(0, 4_000) : null;
@@ -541,7 +645,7 @@ export class DeviceHub {
             return;
           }
         }
-        send({ type: "error", message: 'Send "answer", "start", "listen" then audio (and a "photo") then "stop", "hello" or "ping".' });
+        send({ type: "error", message: 'Send "answer", "sign", "decline", "start", "listen" then audio (and a "photo") then "stop", "hello" or "ping".' });
       },
       /** Audio while listening: 16 kHz mono 16-bit PCM. */
       receiveAudio: (chunk: Uint8Array) => {
