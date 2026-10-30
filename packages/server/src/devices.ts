@@ -1,4 +1,4 @@
-import { AUTO, type Change, type Engine, type Flow, type LogLine, nextRun, type Router, SAMPLE_RATE, sentences, type Speech, spokenForm, type Store, turnAt } from "@huddle/core";
+import { AUTO, type Change, type Engine, fingerprint, type Flow, keyText, type LogLine, nextRun, type Router, SAMPLE_RATE, sentences, type Signer, type Speech, spokenForm, type Store, turnAt } from "@huddle/core";
 import type { Hono } from "hono";
 import type { UpgradeWebSocket, WSContext } from "hono/ws";
 import { bearerOf, same } from "./auth.ts";
@@ -72,6 +72,12 @@ export type ToDevice =
   | { readonly type: "speaking"; readonly text: string; readonly sampleRate: number; readonly bytes: number }
   | { readonly type: "spoken" }
   | { readonly type: "error"; readonly message: string }
+  /**
+   * The board's signing key, as Huddle holds it: pinned the first time the board said it (ok), or refused, with
+   * why (a board whose key changed since it was added signs nothing until it's added again). `fingerprint` is the
+   * key's, to show beside the one in Devices.
+   */
+  | { readonly type: "signer"; readonly ok: boolean; readonly fingerprint: string; readonly name: string; readonly problem?: string }
   | { readonly type: "pong" };
 
 const LINE = 90;
@@ -163,6 +169,8 @@ interface FromDevice {
   readonly audio?: unknown;
   /** "photo": a JPEG the button took as you started to talk, base64. */
   readonly jpeg?: unknown;
+  /** "hello": the board's P-256 public key (raw, base64url), when it signs. */
+  readonly key?: unknown;
 }
 
 export interface DeviceHubOptions {
@@ -285,8 +293,11 @@ export class DeviceHub {
    * answers to what it sends, and (when it says it plays audio and speech is set up) speech. Returns what
    * to call with each message and audio frame it sends, and when it goes.
    */
-  connect(send: (message: ToDevice) => void, hello: { readonly name: string; readonly version: string }, sendAudio?: (chunk: Uint8Array<ArrayBuffer>) => void) {
+  connect(send: (message: ToDevice) => void, hello: { readonly name: string; readonly version: string; readonly deviceId?: string | null }, sendAudio?: (chunk: Uint8Array<ArrayBuffer>) => void) {
     let last = "";
+    /** The key this board signs with, once it's said it and Huddle holds it; why not, when it's refused. */
+    let signer: Signer | null = null;
+    let signerProblem: string | null = null;
     let spokenApproval: string | null = null;
     let playsAudio = false;
     let generation = 0;
@@ -425,7 +436,39 @@ export class DeviceHub {
       tellWorking(asked.run.runId);
     };
 
-    send({ type: "hello", ...hello, speech: this.speech !== null });
+    /**
+     * The board says its key: kept for it the first time (a gadget by its device, a board in a browser by the key
+     * itself), and from then on only that key signs for it. A gadget that comes back with another key is refused
+     * until it's removed and added again, so a swapped board can't pay as yours.
+     */
+    const pin = (raw: string) => {
+      let key: string;
+      try {
+        key = keyText(raw);
+      } catch (error) {
+        signer = null;
+        signerProblem = `The board's key isn't one Huddle can use: ${failure(error)}`;
+        return send({ type: "error", message: signerProblem });
+      }
+      const deviceId = hello.deviceId ?? null;
+      const held = deviceId ? this.store.signerForDevice(deviceId) : this.store.signer(key);
+      signer = null;
+      signerProblem = null;
+      if (held && held.key !== key) {
+        signerProblem = `This board's key changed since it was added (it was ${held.fingerprint}, now ${fingerprint(key)}), so it signs nothing. If you replaced its firmware or the board, remove it in Devices and add it again.`;
+      } else if (held) {
+        signer = held;
+      } else {
+        try {
+          signer = this.store.addSigner({ key, name: deviceId ? hello.name : "Virtual board", deviceId });
+        } catch (error) {
+          signerProblem = `Huddle can't take this board's key: ${failure(error)}`;
+        }
+      }
+      send({ type: "signer", ok: signer !== null, fingerprint: fingerprint(key), name: signer?.name ?? hello.name, ...(signerProblem ? { problem: signerProblem } : {}) });
+    };
+
+    send({ type: "hello", name: hello.name, version: hello.version, speech: this.speech !== null });
     show();
     this.store.events.on("change", onChange);
     // Today's spend and the next run move without a change event: look again each minute.
@@ -448,6 +491,8 @@ export class DeviceHub {
             // The device says whether it plays audio; the virtual button does when you ask it to.
             playsAudio = message.audio === true;
             if (!playsAudio) generation++;
+            // A board that signs says its key.
+            if (typeof message.key === "string") pin(message.key);
             return;
           case "answer":
             if (typeof message.id !== "string" || typeof message.yes !== "boolean") break;
@@ -553,18 +598,20 @@ export function deviceRoutes(
       const device = given ? options.store.deviceByToken(given) : null;
       if (device || !options.token || same(given, options.token)) {
         c.set("deviceName" as never, (device?.name ?? "Virtual button") as never);
+        c.set("deviceId" as never, (device?.id ?? null) as never);
         return next();
       }
       return c.json({ error: "Send a device token, or the Huddle token, as Authorization: Bearer <token> or ?token=." }, 401);
     },
     options.upgradeWebSocket((c) => {
       const name = String(c.get("deviceName" as never) ?? "A device");
+      const deviceId = (c.get("deviceId" as never) as string | null | undefined) ?? null;
       let session: ReturnType<DeviceHub["connect"]> | null = null;
       return {
         onOpen: (_event, socket: WSContext) => {
           session = hub.connect(
             (message) => socket.send(JSON.stringify(message)),
-            { name, version: options.version },
+            { name, version: options.version, deviceId },
             (chunk) => socket.send(chunk),
           );
         },
