@@ -102,6 +102,16 @@ export interface WaitingApproval {
   readonly signs: { readonly id: string; readonly text: string; readonly expires: string } | null;
 }
 
+/** A board that signs for you: its key's fingerprint (the board shows the same), and the gadget it is, if one. */
+export interface SignerView {
+  readonly key: string;
+  readonly fingerprint: string;
+  readonly name: string;
+  readonly deviceId: string | null;
+  readonly createdAt: string;
+  readonly lastSignedAt: string | null;
+}
+
 /** Something your board signed, or is asked to: a payment or a link to a shop, and what came of it. */
 export interface SignView {
   readonly id: string;
@@ -280,7 +290,10 @@ export interface SandboxRequests {
  *   GET    /api/templates                  -> Template[]          (the example flows, with what each still needs here)
  *   GET    /api/devices                    -> Device[]
  *   POST   /api/devices { name }           -> 201 { device, token }   (the token is shown this once; for /devices/ws)
- *   DELETE /api/devices/:id                -> 204
+ *   DELETE /api/devices/:id                -> 204                (its signing key goes too)
+ *   GET    /api/signers                    -> SignerView[]        (the boards that sign for you)
+ *   POST   /api/signers { key, name }      -> 201 SignerView      (a board in a browser: its raw P-256 key, base64url)
+ *   DELETE /api/signers/:key               -> 204                 (its signature counts for nothing from then on)
  *   GET    /api/memory?status=             -> Note[]
  *   GET    /api/memory/search?q=&slice=&status=&limit= -> MemoryHit[]   (best first; slice may repeat)
  *   POST   /api/memory { slice, note }     -> Note                (a person's own note: kept; 400 if it holds a secret)

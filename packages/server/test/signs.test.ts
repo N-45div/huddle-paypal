@@ -83,3 +83,32 @@ describe("payments in the API", () => {
     assert.equal((await app.request("/api/signs")).status, 401, "behind the Huddle token like the rest of /api");
   });
 });
+
+describe("your boards in the API", () => {
+  it("lists them, takes a board in a browser by its key, and forgets one when it's removed", async () => {
+    const store = new Store();
+    const app = createApp({ store, engine: new Engine(store, { mock }), version: "test", publicUrl: "http://huddle.test", token: TOKEN });
+    const virtual = board();
+    const added = await app.request("/api/signers", json({ key: virtual.key, name: "My laptop" }));
+    assert.equal(added.status, 201);
+    const view = (await added.json()) as { key: string; fingerprint: string; name: string; deviceId: string | null };
+    assert.deepEqual([view.key, view.name, view.deviceId], [virtual.key, "My laptop", null]);
+    assert.equal((await app.request("/api/signers", json({ key: virtual.key }))).status, 409, "a key is kept once");
+    assert.equal((await app.request("/api/signers", json({ key: "nope" }))).status, 400);
+    const listed = (await (await app.request("/api/signers", { headers: auth })).json()) as { fingerprint: string }[];
+    assert.deepEqual(listed.map((one) => one.fingerprint), [view.fingerprint]);
+    assert.equal((await app.request(`/api/signers/${virtual.key}`, { method: "DELETE", headers: auth })).status, 204);
+    assert.equal((await app.request(`/api/signers/${virtual.key}`, { method: "DELETE", headers: auth })).status, 404);
+    assert.equal((await app.request("/api/signers")).status, 401, "behind the Huddle token");
+  });
+
+  it("forgets a gadget's key when the gadget is removed, so added again it can say a new one", async () => {
+    const store = new Store();
+    const app = createApp({ store, engine: new Engine(store, { mock }), version: "test", publicUrl: "http://huddle.test", token: TOKEN });
+    const { device } = store.addDevice("Desk button");
+    store.addSigner({ key: board().key, name: "Desk button", deviceId: device.id });
+    assert.equal((await app.request(`/api/devices/${device.id}`, { method: "DELETE", headers: auth })).status, 204);
+    assert.equal(store.signerForDevice(device.id), null);
+    assert.deepEqual(store.signers(), []);
+  });
+});

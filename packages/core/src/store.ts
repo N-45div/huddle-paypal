@@ -369,7 +369,11 @@ export class Store {
 
   removeDevice(id: string): boolean {
     const removed = Number(this.db.prepare("DELETE FROM devices WHERE id = ?").run(id).changes) > 0;
-    if (removed) this.changed({ kind: "devices" });
+    if (removed) {
+      // Its signing key goes with it: added again, it says its key again and that one is kept.
+      if (Number(this.db.prepare("DELETE FROM signers WHERE device_id = ?").run(id).changes) > 0) this.changed({ kind: "sign", runId: null });
+      this.changed({ kind: "devices" });
+    }
     return removed;
   }
 

@@ -1,4 +1,4 @@
-import { nextRun, receiptOf } from "@huddle/core";
+import { keyText, nextRun, receiptOf } from "@huddle/core";
 import { type Assistant, Assistants, type Change, CONTACT_TIERS, type ContactTier, type Engine, Flow, type MemoryHit, type Note, ollamaModels, OwnLimit, type PactIdentity, tokenFactoryModels, vllmModels, periodStart, type Presenter, present, rulesPresenter, VIEW_KINDS, type ViewKind, type ViewWriter, type Router, type SavedFlow, SensitiveNote, type SignIns, type Store, type Tidy, tidyMemory, LEARNING } from "@huddle/core";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -7,7 +7,7 @@ import { type EmailOptions, emailRoutes } from "./email.ts";
 import { mcpRoutes, toolNames } from "./mcp.ts";
 import { routerRoutes } from "./router.ts";
 import { bearerOf, same } from "./auth.ts";
-import type { ApiError, AskReply, FlowView, Info, LearningView, PresentedView, RouterUsage, RouterView, RunDetail, RunSummary, SignView, SpendView, WaitingApproval } from "./api-types.ts";
+import type { ApiError, AskReply, FlowView, Info, LearningView, PresentedView, RouterUsage, RouterView, RunDetail, RunSummary, SignerView, SignView, SpendView, WaitingApproval } from "./api-types.ts";
 import type { Asker } from "./just-ask.ts";
 import { CONNECTORS } from "./connectors-info.ts";
 import type { MonidCatalog } from "./monid.ts";
@@ -233,6 +233,32 @@ export function createApp(options: AppOptions): Hono {
     return c.json(store.addDevice(name.trim().slice(0, 80)), 201);
   });
   app.delete("/api/devices/:id", (c) => (store.removeDevice(c.req.param("id")) ? c.body(null, 204) : bad(c, "There's no such device.", 404)));
+
+  // The boards that sign for you: a gadget's key is kept when it first says hello; a board in a browser is added here.
+  app.get("/api/signers", (c) => c.json<SignerView[]>(store.signers()));
+  app.post("/api/signers", async (c) => {
+    const { key, name } = await body(c);
+    let raw: string;
+    try {
+      raw = keyText(String(key ?? ""));
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error));
+    }
+    try {
+      return c.json<SignerView>(store.addSigner({ key: raw, name: typeof name === "string" && name.trim() ? name.trim().slice(0, 80) : "Virtual board" }), 201);
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 409);
+    }
+  });
+  app.delete("/api/signers/:key", (c) => {
+    let raw: string;
+    try {
+      raw = keyText(c.req.param("key"));
+    } catch {
+      return bad(c, "That isn't a board's key.", 404);
+    }
+    return store.removeSigner(raw) ? c.body(null, 204) : bad(c, "There's no board with that key.", 404);
+  });
 
   app.get("/api/contacts", (c) => c.json(store.contacts()));
   app.post("/api/contacts", async (c) => {
