@@ -32,6 +32,7 @@
 
 #if __has_include("config.h")
 #include "config.h"
+#include "board_key.h"
 #else
 #error "Copy config.example.h to config.h and fill in your Wi-Fi, Huddle's address and the device token."
 #endif
@@ -92,6 +93,9 @@ int micChannel = MIC_RIGHT_CHANNEL ? 1 : 0;  // 0 left, 1 right: picked at start
 volatile int volume = VOLUME;                // 0 to 300: VOLUME, or what the canvas set last (kept in prefs)
 unsigned long approvalAt = 0;                // when the approval on screen arrived
 bool linkUp = false;                         // talking to Huddle now
+// The board's signing key as Huddle holds it: kept (ok), or refused, with why. Shown on the idle screen.
+bool signerOk = false;
+String signerNote;
 
 // Live state for the animations: your voice while you talk, Huddle's while it speaks.
 constexpr size_t WAVE_BARS = 32;
@@ -784,6 +788,7 @@ void draw() {
   small(119, "Today $" + String(spentToday, 4), MUTED);
   if (nextAt.length()) small(129, "Next " + ascii(nextAt) + ": " + ascii(nextFlow), MUTED);
   small(147, flows.empty() ? "hold to talk" : "> " + ascii(flows[picked % flows.size()].name), DIM);
+  if (signerNote.length()) small(137, signerNote, signerOk ? DIM : 0xFD34);
 }
 
 // ---- The link: a WebSocket over Wi-Fi, or frames over the USB cable -------------------------------------
@@ -878,7 +883,14 @@ void onMessage(uint8_t *payload, size_t length) {
     JsonDocument hello;
     hello["type"] = "hello";
     hello["audio"] = true;
+    // The board's public key, so Huddle can check what it signs; the private half never leaves the board.
+    if (boardkey::ready) hello["key"] = boardkey::keyText;
     sendJson(hello);
+  } else if (type == "signer") {
+    // Huddle kept this board's key, or refused it (a board whose key changed since it was added).
+    signerOk = doc["ok"] | false;
+    signerNote = signerOk ? "key " + String(doc["fingerprint"] | "") : "key refused: see Devices";
+    logLine("  signing key %s (%s)%s%s", signerOk ? "kept" : "refused", (const char *)(doc["fingerprint"] | ""), signerOk ? "" : ": ", signerOk ? "" : (const char *)(doc["problem"] | ""));
   } else if (type == "approval") {
     if (mode != Mode::Approval || approvalId != String(doc["id"] | "")) {
       approvalAt = millis();
@@ -1566,6 +1578,17 @@ void setup() {
   led.begin();
   led.setBrightness(60);
   prefs.begin("huddle", false);
+  // The signing key, before I2S starts (making one uses the chip's own entropy source, which I2S mustn't share).
+  if (boardkey::load(prefs)) logLine("made this board's signing key: %s", boardkey::fingerprint.c_str());
+  else if (boardkey::ready) logLine("signing key %s", boardkey::fingerprint.c_str());
+  else logLine("couldn't make a signing key: this board can't sign payments");
+  // It signs a test text and checks it with its own public key, as Huddle will; failing that, it signs nothing.
+  if (boardkey::ready && !boardkey::selfCheck()) {
+    boardkey::ready = false;
+    logLine("the signing key failed its self-check: this board won't sign payments");
+  } else if (boardkey::ready) {
+    logLine("signing self-check passed");
+  }
   tftMap = prefs.getInt("tft", 0) == 1 ? 1 : 0;
   // The LED blinks the screen wiring in use (1 or 2), so a dark screen still says something.
   for (int i = 0; i <= tftMap; i++) {
