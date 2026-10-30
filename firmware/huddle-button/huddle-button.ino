@@ -56,9 +56,10 @@ constexpr uint32_t RATE = 16000;
 constexpr size_t MIC_FRAME = 1600;                   // 100 ms of samples
 constexpr size_t PLAY_BUFFER = 16000 * 2 * 12;       // 12 s of audio, in PSRAM
 constexpr unsigned long HOLD_YES_MS = 1000;          // how long a hold takes to say yes to an approval
+constexpr unsigned long HOLD_SIGN_MS = 2000;         // a payment takes a longer hold: it's money
 
 // ---- State --------------------------------------------------------------------------------------------
-enum class Mode { Connecting, Idle, Approval, Listening, Thinking };
+enum class Mode { Connecting, Idle, Approval, Sign, Listening, Thinking };
 enum class Mood { Idle, Waiting, Happy, Oops, Thinking };
 // Declared early: the Arduino build puts function prototypes above the drawing section where these live.
 struct Sprite;
@@ -96,6 +97,92 @@ bool linkUp = false;                         // talking to Huddle now
 // The board's signing key as Huddle holds it: kept (ok), or refused, with why. Shown on the idle screen.
 bool signerOk = false;
 String signerNote;
+
+// A payment (or a link to a shop) waiting for the board's signature. Everything shown is read from signText
+// itself, the exact text that gets signed, never from words Huddle sends beside it.
+struct SignLine {
+  String name, price;
+  int qty = 0;
+};
+String signId, signText, signFlow, signShop, signShopId, signTotal, signCurrency, signProblem;
+std::vector<SignLine> signLines;
+bool signReadable = false, signNew = false, signLink = false;
+int signMore = 0;
+unsigned long signAt = 0;  // when it arrived: a press that began before isn't a signature
+
+/** A decimal amount as whole cents ("12.50" is 1250), or -1 when it isn't written like one. */
+long centsOf(const String &value) {
+  int dot = value.indexOf('.');
+  if (value.length() == 0 || dot == 0 || (dot > 0 && (int)value.length() - dot != 3)) return -1;
+  long cents = 0;
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value.c_str()[i];
+    if ((int)i == dot) continue;
+    if (c < '0' || c > '9') return -1;
+    cents = cents * 10 + (c - '0');
+  }
+  return dot < 0 ? cents * 100 : cents;
+}
+
+/** Shops this board has signed for before, by their id: one it hasn't shows as NEW, so a lookalike stands out. */
+bool knownShop(const String &id) {
+  String known = "," + prefs.getString("shops", "") + ",";
+  return known.indexOf("," + id + ",") >= 0;
+}
+
+void rememberShop(const String &id) {
+  if (!id.length() || knownShop(id)) return;
+  String known = prefs.getString("shops", "");
+  known = known.length() ? known + "," + id : id;
+  if (known.length() > 1000) known = known.substring(known.indexOf(',', known.length() - 1000) + 1);
+  prefs.putString("shops", known);
+}
+
+/** Reads the text to sign: the board signs only what it can read, and a payment whose lines add up to its total. */
+void readSignable() {
+  signLines.clear();
+  signReadable = false;
+  signProblem = "";
+  JsonDocument inner;
+  if (deserializeJson(inner, signText)) {
+    signProblem = "it can't be read";
+    return;
+  }
+  String kind = inner["kind"] | "";
+  signLink = kind == "link";
+  signShop = inner["shop"]["name"] | "";
+  signShopId = inner["shop"]["id"] | "";
+  if (!signShopId.length() || (kind != "buy" && !signLink)) {
+    signProblem = "it isn't a payment this board knows";
+    return;
+  }
+  signNew = !knownShop(signShopId);
+  if (signLink) {
+    signReadable = true;
+    return;
+  }
+  long sum = 0;
+  for (JsonObject item : inner["items"].as<JsonArray>()) {
+    SignLine line;
+    line.name = item["name"] | "";
+    line.qty = item["qty"] | 0;
+    line.price = item["price"] | "";
+    long each = centsOf(line.price);
+    if (each <= 0 || line.qty < 1) {
+      signProblem = "a line has no price";
+      return;
+    }
+    sum += each * line.qty;
+    signLines.push_back(line);
+  }
+  signTotal = inner["total"] | "";
+  signCurrency = inner["currency"] | "";
+  if (signLines.empty() || centsOf(signTotal) != sum) {
+    signProblem = "its lines don't add up to its total";
+    return;
+  }
+  signReadable = true;
+}
 
 // Live state for the animations: your voice while you talk, Huddle's while it speaks.
 constexpr size_t WAVE_BARS = 32;
@@ -714,7 +801,7 @@ void draw() {
   // A turn that came with a photo shows it while you talk and while Huddle looks; the answer is the Huddler's.
   bool showPhoto = photoNow && thumb && !speaking && (mode == Mode::Listening || mode == Mode::Thinking);
   if (showPhoto) drawPhoto();
-  else if (!duoNow() || speaking) drawWho();
+  else if ((!duoNow() || speaking) && mode != Mode::Sign) drawWho();
   if (mode == Mode::Connecting) {
     drawFace(Face::Sleep);
     caption(114, "Connecting", FACE);
@@ -766,6 +853,51 @@ void draw() {
     if (!teamNames.empty()) drawTeam(122);
     else if (heardText.length()) small(119, "\"" + ascii(heardText) + "\"", MUTED, 2);
     return;  // the dots hop in animate()
+  }
+  if (mode == Mode::Sign) {
+    small(4, ascii(signFlow), MUTED);
+    if (!signReadable) {
+      small(40, "Won't sign this:", RECORD);
+      small(52, signProblem, FACE, 4);
+      small(141, "tap: no", FACE);
+      return;
+    }
+    if (signLink) {
+      small(30, "Link your PayPal at", FACE);
+      small(44, ascii(signShop), AMBER, 2);
+      small(68, ascii(signShopId) + (signNew ? "  NEW" : ""), signNew ? RECORD : DIM);
+      small(84, "to this board?", FACE);
+    } else {
+      // The total, big; then who's paid (NEW when this board hasn't paid them before), then each line.
+      String amount = signCurrency == "USD" ? "$" + signTotal : signTotal + " " + signCurrency;
+      tft->setTextSize(2);
+      tft->setTextColor(AMBER);
+      tft->setCursor(max(0, (128 - (int)amount.length() * 12) / 2), 18);
+      tft->print(amount);
+      tft->setTextSize(1);
+      small(40, "to " + ascii(signShop), FACE);
+      small(50, ascii(signShopId) + (signNew ? "  NEW" : ""), signNew ? RECORD : DIM);
+      int y = 66;
+      size_t shown = 0;
+      for (const SignLine &line : signLines) {
+        if (shown == 6) break;
+        String price = line.price;
+        String left = String(line.qty) + "x " + ascii(line.name);
+        size_t room = 21 - price.length() - 1;
+        if (left.length() > room) left = left.substring(0, room - 1) + ".";
+        tft->setTextColor(FACE);
+        tft->setCursor(1, y);
+        tft->print(left);
+        tft->setCursor(128 - (int)price.length() * 6, y);
+        tft->print(price);
+        y += 10;
+        shown++;
+      }
+      if (signLines.size() > shown) small(y, "+" + String(signLines.size() - shown) + " more", MUTED);
+    }
+    small(141, signMore > 0 ? "hold 2s: sign tap: no+" + String(signMore) : "hold 2s: sign  tap: no", FACE);
+    tft->fillRoundRect(8, 153, 112, 5, 2, TRACK);
+    return;
   }
   if (mode == Mode::Approval) {
     drawFace(Face::Ask);
@@ -891,6 +1023,34 @@ void onMessage(uint8_t *payload, size_t length) {
     signerOk = doc["ok"] | false;
     signerNote = signerOk ? "key " + String(doc["fingerprint"] | "") : "key refused: see Devices";
     logLine("  signing key %s (%s)%s%s", signerOk ? "kept" : "refused", (const char *)(doc["fingerprint"] | ""), signerOk ? "" : ": ", signerOk ? "" : (const char *)(doc["problem"] | ""));
+  } else if (type == "sign") {
+    // A payment (or a link) only this board's signature says yes to.
+    String id = doc["id"] | "";
+    if (mode != Mode::Sign || signId != id) {
+      signAt = millis();
+      lastActivity = millis();
+      signId = id;
+      signText = doc["text"] | "";
+      readSignable();
+    }
+    mode = Mode::Sign;
+    who = "hud";
+    whoName = "";
+    signFlow = doc["flow"] | "";
+    signMore = doc["more"] | 0;
+    setLed(0, 20, 40);
+  } else if (type == "signed") {
+    // Huddle took the signature; the shop's answer comes as "payment".
+    rememberShop(signShopId);
+    mood = Mood::Happy;
+    moodUntil = millis() + 2000;
+  } else if (type == "payment") {
+    replyFlow = doc["status"] == "paid" ? "Paid" : "Not paid";
+    replyText = doc["line"] | "";
+    replyUntil = millis() + 8000;
+    mood = doc["status"] == "paid" ? Mood::Happy : Mood::Oops;
+    moodUntil = millis() + 4000;
+    setLed(doc["status"] == "paid" ? 0 : 40, doc["status"] == "paid" ? 40 : 0, 0);
   } else if (type == "approval") {
     if (mode != Mode::Approval || approvalId != String(doc["id"] | "")) {
       approvalAt = millis();
@@ -968,7 +1128,7 @@ void onMessage(uint8_t *payload, size_t length) {
   } else if (type == "working") {
     // The work passed to another assistant, or to several at once ("with": those beside them, until each is
     // done): their logos or Huddlers take the screen, and the clock starts again for someone new.
-    if (mode != Mode::Approval) {
+    if (mode != Mode::Approval && mode != Mode::Sign) {
       String next = String(doc["assistant"]["id"] | "hud");
       if (next != who) workStart = millis();
       who = next;
@@ -1320,6 +1480,7 @@ void animate() {
   }
   if (now - lastAnim < 50) return;
   lastAnim = now;
+  if (mode == Mode::Sign) return;  // the payment stays as drawn: nothing animates over it
   static int shown = -1;  // the resting face last drawn, so a still face isn't redrawn 20 times a second
   if (mode == Mode::Listening) {
     shown = -1;
@@ -1451,20 +1612,20 @@ void onTap() {
   redraw = true;
 }
 
-/** While you hold on an approval: a bar fills along the bottom; once it's full, letting go says yes. */
-void drawHoldBar(unsigned long held) {
+/** While you hold on an approval or a payment: a bar fills along the bottom; once it's full, letting go says yes. */
+void drawHoldBar(unsigned long held, unsigned long needed = HOLD_YES_MS) {
   if (!tft) return;
   static int drawn = -1;
-  int width = held >= HOLD_YES_MS ? 112 : (int)(112 * held / HOLD_YES_MS);
+  int width = held >= needed ? 112 : (int)(112 * held / needed);
   if (held == 0) {
     drawn = -1;
     return;
   }
   if (width == drawn) return;
   if (width >= 5) tft->fillRoundRect(8, 153, width, 5, 2, MINT);
-  if (held >= HOLD_YES_MS && drawn < 112) {
+  if (held >= needed && drawn < 112) {
     tft->fillRect(0, 140, 128, 10, BG);
-    small(141, "let go to say yes", MINT);
+    small(141, mode == Mode::Sign ? "let go to sign" : "let go to say yes", MINT);
   }
   drawn = width;
 }
@@ -1480,7 +1641,9 @@ void readButton() {
   if (mode == Mode::Idle && down && held > 350 && linkUp) startListening();
   // A press that began before this approval arrived isn't an answer to it.
   bool forApproval = mode == Mode::Approval && approvalId.length() && downAt >= approvalAt;
+  bool forSign = mode == Mode::Sign && signId.length() && downAt >= signAt;
   if (forApproval && down && held > 120) drawHoldBar(held);
+  if (forSign && signReadable && down && held > 120) drawHoldBar(held, HOLD_SIGN_MS);
   if (!down && wasDown) {
     if (mode == Mode::Listening) {
       stopListening();
@@ -1497,7 +1660,29 @@ void readButton() {
       mood = yes ? Mood::Happy : Mood::Idle;
       moodUntil = now + 2000;
       redraw = true;
-    } else if (mode != Mode::Approval && held > 30 && held < 350) {
+    } else if (forSign && held > 30) {
+      // A payment is signed only by a full two-second hold, and only if the board could read it; anything less is no.
+      JsonDocument reply;
+      if (signReadable && held >= HOLD_SIGN_MS) {
+        String signature = boardkey::sign(signText);
+        if (signature.length()) {
+          reply["type"] = "sign";
+          reply["id"] = signId;
+          reply["signature"] = signature;
+          logLine("signed %s", signId.c_str());
+        } else {
+          logLine("couldn't sign %s: no working key", signId.c_str());
+          note = "This board can't sign: its key failed its check.";
+        }
+      } else {
+        reply["type"] = "decline";
+        reply["id"] = signId;
+        logLine("declined %s", signId.c_str());
+      }
+      if (!reply["type"].isNull()) sendJson(reply);
+      flushPlayback();
+      redraw = true;
+    } else if (mode != Mode::Approval && mode != Mode::Sign && held > 30 && held < 350) {
       onTap();
     }
     drawHoldBar(0);
