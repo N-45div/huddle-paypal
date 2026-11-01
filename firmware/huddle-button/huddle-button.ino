@@ -1045,12 +1045,15 @@ void onMessage(uint8_t *payload, size_t length) {
     mood = Mood::Happy;
     moodUntil = millis() + 2000;
   } else if (type == "payment") {
-    replyFlow = doc["status"] == "paid" ? "Paid" : "Not paid";
+    // Paid; linking (a link the shop handed to PayPal: you finish in Huddle); or failed, with why.
+    String status = doc["status"] | "";
+    bool went = status == "paid" || status == "linking";
+    replyFlow = status == "paid" ? "Paid" : status == "linking" ? "Signed" : "Didn't go through";
     replyText = doc["line"] | "";
     replyUntil = millis() + 8000;
-    mood = doc["status"] == "paid" ? Mood::Happy : Mood::Oops;
+    mood = went ? Mood::Happy : Mood::Oops;
     moodUntil = millis() + 4000;
-    setLed(doc["status"] == "paid" ? 0 : 40, doc["status"] == "paid" ? 40 : 0, 0);
+    setLed(went ? 0 : 40, went ? 40 : 0, 0);
   } else if (type == "approval") {
     if (mode != Mode::Approval || approvalId != String(doc["id"] | "")) {
       approvalAt = millis();
