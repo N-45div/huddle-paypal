@@ -134,6 +134,11 @@ your PayPal at a shop.
   shows "Link this board at" the shop and signs it the same way. Huddle then opens PayPal's page, where you
   save your PayPal with the shop. From then on that shop charges your PayPal only for carts this board signs.
 
+Huddle's tests build this signing code (`board_key.h`) on a computer against mbedTLS, with stand-ins for
+the board's flash and random source in `test/host`, and check its keys and signatures with the code Huddle and
+the shop use. That needs a C++ compiler and mbedTLS (`apt install g++ libmbedtls-dev`); without them the test
+is skipped.
+
 The key sits in the board's flash as plain bytes. Anyone with the board and a USB cable can read flash that
 isn't encrypted, so for real money turn on the ESP32-S3's flash encryption and NVS encryption, or keep the key
 in a secure element like an ATECC608.
