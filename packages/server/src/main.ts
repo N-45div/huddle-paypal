@@ -198,6 +198,8 @@ const hud = llmUrl && quickModel
   : undefined;
 const justAsk = llmUrl && fillModel ? planner({ url: llmUrl, model: fillModel, key: llmKey, fetcher: meter.fetchFor("just ask"), ...(hud ? { wrapUp: hud } : {}) }) : undefined;
 const asker = justAsk ? new Asker(store, engine, router, justAsk) : undefined;
+// Bean & Leaf, the demo shop, with its own database beside Huddle's: Huddle reaches it over HTTP, as any shop.
+const shop = demoShop(process.env, { publicUrl: `${publicUrl}/shop`, db: join(dirname(env("HUDDLE_DB") ?? "huddle.db"), "shop.db") });
 const app = createApp({
   store,
   engine,
@@ -217,9 +219,8 @@ const app = createApp({
   monid: monidKey ? monidCatalog({ key: monidKey, maxUsd: monidMaxUsd }) : undefined,
   // Tidying memory up: the fill-in model reads each slice's kept notes, only when the person asks.
   tidy: llmUrl && fillModel ? (notes) => tidyMemory(notes, { model: { url: llmUrl, model: fillModel, key: llmKey }, fetcher: meter.fetchFor("tidy up") }) : undefined,
+  ...(shop ? { shop: `${publicUrl}/shop` } : {}),
 });
-// Bean & Leaf, the demo shop, with its own database beside Huddle's: Huddle reaches it over HTTP, as any shop.
-const shop = demoShop(process.env, { publicUrl: `${publicUrl}/shop`, db: join(dirname(env("HUDDLE_DB") ?? "huddle.db"), "shop.db") });
 if (shop) {
   app.get("/shop/", (c) => c.redirect("/shop", 308));
   app.route("/shop", shop.app);

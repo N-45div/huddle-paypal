@@ -1,5 +1,5 @@
 import { keyText, nextRun, receiptOf } from "@huddle/core";
-import { type Assistant, Assistants, type Change, CONTACT_TIERS, type ContactTier, type Engine, Flow, type MemoryHit, type Note, ollamaModels, OwnLimit, type PactIdentity, tokenFactoryModels, vllmModels, periodStart, type Presenter, present, rulesPresenter, VIEW_KINDS, type ViewKind, type ViewWriter, type Router, type SavedFlow, SensitiveNote, type SignIns, type Store, type Tidy, tidyMemory, LEARNING } from "@huddle/core";
+import { type Assistant, Assistants, type Change, CONTACT_TIERS, type ContactTier, type Engine, Flow, type MemoryHit, type Note, ollamaModels, OwnLimit, type PactIdentity, tokenFactoryModels, vllmModels, periodStart, type Presenter, present, rulesPresenter, VIEW_KINDS, type ViewKind, type ViewWriter, type Router, type SavedFlow, SensitiveNote, type SignIns, type SignRequest, type Store, type Tidy, tidyMemory, LEARNING } from "@huddle/core";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { a2aRoutes } from "./a2a.ts";
@@ -60,6 +60,8 @@ export interface AppOptions {
   readonly tidy?: (notes: readonly Note[]) => Promise<Tidy>;
   /** Just ask: plans what was said over your flows and assistants, and starts it (POST /api/ask, MCP just_ask). */
   readonly asker?: Asker;
+  /** The demo shop's address, when Huddle opens it: offered first for linking a board. */
+  readonly shop?: string;
 }
 
 /** A flow from a request body, or the problems with it, one line each. */
@@ -135,6 +137,7 @@ export function createApp(options: AppOptions): Hono {
       guard: options.engine.guard?.name ?? null,
       present: { chooser: presenting.presenter.name, writer: presenting.writer?.model ?? null },
       justAsk: Boolean(options.asker),
+      shop: options.shop ?? null,
     }),
   );
 
@@ -439,36 +442,66 @@ export function createApp(options: AppOptions): Hono {
   });
 
   // What your boards signed, or are asked to: payments and links to shops.
+  const signView = (request: SignRequest): SignView => ({
+    id: request.id,
+    kind: request.kind,
+    status: request.status,
+    text: request.text,
+    runId: request.runId,
+    stepId: request.stepId,
+    shop: request.shop,
+    expires: request.expires,
+    board: request.key ? (store.signer(request.key)?.fingerprint ?? null) : null,
+    result: request.result,
+    error: request.error,
+    createdAt: request.createdAt,
+    signedAt: request.signedAt,
+  });
   app.get("/api/signs", (c) => {
     const waiting = c.req.query("status") === "waiting";
+    const kind = c.req.query("kind");
     const requests = waiting ? store.waitingSignRequests() : store.signRequests(Math.min(200, Math.max(1, Number(c.req.query("limit") ?? 100) || 100)));
-    return c.json<SignView[]>(
-      requests.map((request) => ({
-        id: request.id,
-        kind: request.kind,
-        status: request.status,
-        text: request.text,
-        runId: request.runId,
-        stepId: request.stepId,
-        shop: request.shop,
-        expires: request.expires,
-        board: request.key ? (store.signer(request.key)?.fingerprint ?? null) : null,
-        result: request.result,
-        error: request.error,
-        createdAt: request.createdAt,
-        signedAt: request.signedAt,
-      })),
-    );
+    return c.json<SignView[]>(requests.filter((request) => !kind || request.kind === kind).map(signView));
   });
   // A board's signature of a payment: checked here, again at the shop, and the run carries on in the background.
+  // Of a link: given to the shop, which answers with PayPal's page to open next (in the link's result).
   app.post("/api/signs/:id", async (c) => {
     const { signature, key } = await body(c);
     if (typeof signature !== "string" || typeof key !== "string") return bad(c, "Send the board's signature and key as { signature, key }, base64url.");
-    if (!store.signRequest(c.req.param("id"))) return bad(c, "There's nothing to sign by that id.", 404);
+    const request = store.signRequest(c.req.param("id"));
+    if (!request) return bad(c, "There's nothing to sign by that id.", 404);
     try {
-      return c.json({ runId: engine.sign(c.req.param("id"), signature, key) }, 202);
+      if (request.kind === "link") return c.json(signView(await engine.signLink(request.id, signature, key)));
+      return c.json({ runId: engine.sign(request.id, signature, key) }, 202);
     } catch (error) {
       return bad(c, error instanceof Error ? error.message : String(error), 409);
+    }
+  });
+  // Linking a board to your PayPal at a shop: the shop writes what the board signs; PayPal sends you back to Devices.
+  app.post("/api/links", async (c) => {
+    const { shop, key } = await body(c);
+    if (typeof shop !== "string" || !/^https?:\/\//.test(shop) || typeof key !== "string") return bad(c, "Send the shop's address and the board's key as { shop, key }.");
+    let board = null;
+    try {
+      board = store.signer(keyText(key));
+    } catch {
+      // Not a key: not one of yours.
+    }
+    if (!board) return bad(c, "That key isn't one of your boards'. Add the board in Devices first.", 404);
+    try {
+      return c.json(signView(await engine.startLink(shop, board.key, `${options.publicUrl}/#/devices`)), 201);
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 502);
+    }
+  });
+  // Back from PayPal (or later): asks the shop how the link went.
+  app.post("/api/links/:id/check", async (c) => {
+    const request = store.signRequest(c.req.param("id"));
+    if (!request || request.kind !== "link") return bad(c, "There's no link by that id.", 404);
+    try {
+      return c.json(signView(await engine.checkLink(request.id)));
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 502);
     }
   });
 

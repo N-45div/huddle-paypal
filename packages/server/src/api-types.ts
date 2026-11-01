@@ -39,6 +39,8 @@ export interface Info {
   readonly present: { readonly chooser: string; readonly writer: string | null };
   /** Whether Just ask is on (a model to plan with): POST /api/ask, and the button's and quick bar's first choice. */
   readonly justAsk: boolean;
+  /** The demo shop's address, when this Huddle opens it (at /shop). */
+  readonly shop: string | null;
 }
 
 /** POST /api/ask (Just ask): the plan, and the run it started, or the one assistant's answer. */
@@ -125,7 +127,7 @@ export interface SignView {
   readonly expires: string;
   /** The fingerprint of the board that signed it. */
   readonly board: string | null;
-  /** The shop's order, once paid. */
+  /** The shop's order, once paid; for a link, the board's key, then PayPal's page (approveUrl) and the PayPal saved. */
   readonly result: unknown;
   readonly error: string | null;
   readonly createdAt: string;
@@ -285,8 +287,11 @@ export interface SandboxRequests {
  *   GET    /api/runs/:id                   -> RunDetail
  *   GET    /api/approvals                  -> WaitingApproval[]
  *   POST   /api/approvals/:id { yes }      -> 202 { runId }      (409 for a yes to a payment: only your board's signature says yes)
- *   GET    /api/signs?status=waiting       -> SignView[]          (what your board signed or is asked to, newest first)
+ *   GET    /api/signs?status=waiting&kind= -> SignView[]          (what your board signed or is asked to, newest first)
  *   POST   /api/signs/:id { signature, key } -> 202 { runId }    (a board's signature of a payment, raw P-256 r||s and key, base64url)
+ *                                           -> SignView          (of a link: result.approveUrl is PayPal's page to open next)
+ *   POST   /api/links { shop, key }        -> 201 SignView        (links a board at a shop: the shop's text for it to sign)
+ *   POST   /api/links/:id/check            -> SignView            (how it went at the shop: linked once PayPal saved yours)
  *   GET    /api/templates                  -> Template[]          (the example flows, with what each still needs here)
  *   GET    /api/devices                    -> Device[]
  *   POST   /api/devices { name }           -> 201 { device, token }   (the token is shown this once; for /devices/ws)

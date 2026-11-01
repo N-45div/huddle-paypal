@@ -75,8 +75,11 @@ export type ToDevice =
   | { readonly type: "answered"; readonly id: string; readonly yes: boolean }
   /** The board's signature was taken; the run goes on to the shop. */
   | { readonly type: "signed"; readonly id: string }
-  /** What came of a payment this board signed: paid, or failed with why. */
-  | { readonly type: "payment"; readonly id: string; readonly status: "paid" | "failed"; readonly line: string }
+  /**
+   * What came of a payment this board signed: paid, or failed with why. Of a link: linking, once the shop has
+   * handed it to PayPal (you say yes on PayPal's page, from Devices), or failed.
+   */
+  | { readonly type: "payment"; readonly id: string; readonly status: "paid" | "linking" | "failed"; readonly line: string }
   /** `assistant`: who'll answer (the flow's last assistant step), so the button can show its Huddler. */
   | { readonly type: "started"; readonly runId: string; readonly flow: string; readonly assistant: Who | null }
   /** "Just ask": what Huddle will do with what you said, said out loud too; `team`, who'll do it, in order. */
@@ -406,21 +409,25 @@ export class DeviceHub {
       ours.set(run.id, key);
       send({ type: "working", runId: run.id, assistant: team[0]!, ...(team.length > 1 ? { with: team.slice(1) } : {}) });
     };
-    /** Payments this board signed, until it's told what came of them. */
+    /** Payments (and links) this board signed, until it's told what came of them. */
     const signedHere = new Set<string>();
     const tellPayments = () => {
       for (const id of signedHere) {
         const request = this.store.signRequest(id);
-        if (!request || (request.status !== "paid" && request.status !== "failed")) continue;
+        if (!request) continue;
+        const handedOn = request.kind === "link" && request.status === "signed" && typeof (request.result as { approveUrl?: unknown } | null)?.approveUrl === "string";
+        if (request.status !== "paid" && request.status !== "failed" && !handedOn) continue;
         signedHere.delete(id);
-        let line = request.status === "failed" ? `It didn't go through: ${request.error ?? "the shop said no"}` : "Paid.";
+        const status = request.status === "failed" ? "failed" : handedOn ? "linking" : "paid";
+        let line = status === "failed" ? `It didn't go through: ${request.error ?? "the shop said no"}` : status === "linking" ? "Signed. Finish in Huddle's Devices, on PayPal's page." : "Paid.";
         try {
           const signed = parseSignable(request.text);
-          if (request.status === "paid" && signed.kind === "buy") line = `Paid ${amountText(signed.total, signed.currency)} to ${signed.shop.name} with PayPal.`;
+          if (status === "paid" && signed.kind === "buy") line = `Paid ${amountText(signed.total, signed.currency)} to ${signed.shop.name} with PayPal.`;
+          if (status === "linking") line = `Signed. To finish, say yes on PayPal's page in Huddle's Devices, and ${signed.shop.name} is linked.`;
         } catch {
           // Said plainly, then.
         }
-        send({ type: "payment", id, status: request.status, line });
+        send({ type: "payment", id, status, line });
         void say(line);
       }
     };

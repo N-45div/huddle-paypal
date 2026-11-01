@@ -73,6 +73,7 @@ describe("the API", () => {
       guard: null,
       present: { chooser: "rules", writer: null },
       justAsk: false,
+      shop: null,
     });
     assert.equal((await app.request("/.well-known/agent-card.json")).status, 200);
   });
