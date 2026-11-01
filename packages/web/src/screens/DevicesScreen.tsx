@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api, describeError, deviceSocketUrl } from "../api.ts";
+import { type BoardKey, loadBoardKey } from "../board-key.ts";
 import { useApp } from "../app-context.ts";
 import { Empty, ErrorNote, Hint, Icon, Loading } from "../components/bits.tsx";
+import { money, signableIn } from "../components/Payment.tsx";
 import { useChanges } from "../events.ts";
 import { ago, dollars, fullTime } from "../format.ts";
 import { useResource } from "../hooks.ts";
@@ -13,8 +15,30 @@ import { usbSession } from "../usb-session.ts";
 import { openMic, PcmPlayer } from "../voice.ts";
 import { TokenRow } from "./ContactsScreen.tsx";
 
-type Screen = Extract<DeviceMessage, { type: "approval" } | { type: "idle" }>;
+type Screen = Extract<DeviceMessage, { type: "approval" } | { type: "idle" } | { type: "sign" }>;
+type SignerNote = Extract<DeviceMessage, { type: "signer" }>;
 const SPEAK_KEY = "huddle.button.speak";
+const SHOPS_KEY = "huddle.board.shops";
+/** How long you hold to sign, as on the button. */
+const HOLD_SIGN_MS = 2_000;
+
+/** The shops this browser's board has signed for: one it hasn't is marked NEW, as on the button. */
+function knownShops(): string[] {
+  try {
+    const held = JSON.parse(localStorage.getItem(SHOPS_KEY) ?? "[]") as unknown;
+    return Array.isArray(held) ? held.filter((one): one is string => typeof one === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function rememberShop(id: string): void {
+  try {
+    const known = knownShops();
+    if (!known.includes(id)) localStorage.setItem(SHOPS_KEY, JSON.stringify([...known, id].slice(-50)));
+  } catch {
+    // Not remembered in this browser: the shop is shown as new again next time.
+  }
+}
 
 /**
  * Your gadgets: the Huddle button on your desk, and this virtual one, which talks to Huddle the same
@@ -178,11 +202,33 @@ function VirtualButton() {
   const [heardText, setHeardText] = useState<string | null>(null);
   const player = useRef(new PcmPlayer());
   const mic = useRef<{ stop(): void } | null>(null);
+  /** This browser's signing key, once it's loaded, and what Huddle said of it. */
+  const [board, setBoard] = useState<BoardKey | null>(null);
+  const boardRef = useRef<BoardKey | null>(null);
+  const [signer, setSigner] = useState<SignerNote | null>(null);
+  const [signing, setSigning] = useState(false);
+  const paymentAt = useRef(0);
   speakRef.current = speak;
-  /** Tells Huddle whether to send speech: only when you want it read aloud and Huddle can speak. */
+  /** Tells Huddle whether to send speech (only when you want it read aloud and Huddle can speak), and the board's key. */
   const sendHello = () => {
-    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "hello", audio: speakRef.current && serverSpeechRef.current }));
+    const key = boardRef.current?.key;
+    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "hello", audio: speakRef.current && serverSpeechRef.current, ...(key ? { key } : {}) }));
   };
+
+  useEffect(() => {
+    let gone = false;
+    void loadBoardKey()
+      .then((loaded) => {
+        if (gone) return;
+        boardRef.current = loaded;
+        setBoard(loaded);
+        sendHello();
+      })
+      .catch(() => setNote("This browser can't make a signing key, so this board can't sign payments."));
+    return () => {
+      gone = true;
+    };
+  }, []);
 
   useEffect(() => {
     let closed = false;
@@ -214,6 +260,24 @@ function VirtualButton() {
           spoken.current = message.id;
           say(`${message.flow}. ${message.line}${message.warning ? ` Careful: ${message.warning}.` : ""}`);
         }
+      } else if (message.type === "sign") {
+        setScreen(message);
+        setMood("waiting");
+        if (spoken.current !== message.id) {
+          spoken.current = message.id;
+          say(`${message.flow}. ${message.line}. Hold to sign it, or tap for no.`);
+        }
+      } else if (message.type === "signer") {
+        setSigner(message);
+        if (!message.ok && message.problem) setNote(message.problem);
+      } else if (message.type === "signed") {
+        setNote("Signed. Huddle took it; the shop's answer comes next.");
+        flash("happy");
+      } else if (message.type === "payment") {
+        paymentAt.current = Date.now();
+        setNote(message.line);
+        say(message.line);
+        flash(message.status === "failed" ? "oops" : "happy");
       } else if (message.type === "idle") {
         setScreen(message);
         setMood((current) => (current === "waiting" ? "idle" : current));
@@ -225,7 +289,8 @@ function VirtualButton() {
           window.clearTimeout(replyTimer.current);
           replyTimer.current = window.setTimeout(() => setReply(null), 15_000);
         }
-        setNote(`${message.flow}: ${message.state === "done" ? "done" : message.state === "failed" ? "failed" : "stopped"}`);
+        // What came of a payment just now says more than "failed": it stays.
+        if (Date.now() - paymentAt.current > 5_000) setNote(`${message.flow}: ${message.state === "done" ? "done" : message.state === "failed" ? "failed" : "stopped"}`);
       } else if (message.type === "answered") {
         setNote(message.yes ? "Approved." : "Declined.");
       } else if (message.type === "started") {
@@ -291,6 +356,24 @@ function VirtualButton() {
   };
 
   const flows = screen?.type === "idle" ? screen.flows : [];
+  const signable = screen?.type === "sign" ? signableIn(screen.text) : null;
+  const fresh = signable ? !knownShops().includes(signable.shop.id) : false;
+
+  /** Held long enough: this browser's key signs exactly the text on the screen, and Huddle checks it. */
+  const signScreen = async () => {
+    if (screen?.type !== "sign" || !board || signing) return;
+    if (!signable) return setNote("This board can't read what it's asked to sign, so it won't sign it.");
+    if (signer && !signer.ok) return setNote(signer.problem ?? "Huddle doesn't take this board's signature.");
+    setSigning(true);
+    try {
+      send({ type: "sign", id: screen.id, signature: await board.sign(screen.text) });
+      rememberShop(signable.shop.id);
+    } catch {
+      setNote("This browser couldn't sign it.");
+    } finally {
+      setSigning(false);
+    }
+  };
   const chosen = flows.find((flow) => flow.id === picked) ?? flows[0];
 
   /** Hold to talk: the mic streams to Huddle until you let go; your words start the chosen flow, or go to the router. */
@@ -344,6 +427,42 @@ function VirtualButton() {
               <p className="gadget-flow">{screen.flow}</p>
               <p className="gadget-line">{screen.line}</p>
               {screen.warning && <p className="gadget-warn">{screen.warning}</p>}
+              {screen.more > 0 && <p className="gadget-meta">+{screen.more} more waiting</p>}
+            </>
+          )}
+          {screen?.type === "sign" && (
+            <>
+              <p className="gadget-flow">{screen.flow}</p>
+              {signable ? (
+                <>
+                  <p className="gadget-line">
+                    {signable.kind === "link" ? "Link this board at " : "Pay "}
+                    {signable.shop.name}
+                    {fresh && <span className="gadget-new">NEW</span>}
+                  </p>
+                  <p className="gadget-meta">{signable.shop.id}</p>
+                  {signable.kind === "buy" ? (
+                    <ul className="gadget-items">
+                      {signable.items.map((item, index) => (
+                        <li key={index}>
+                          <span>
+                            {item.qty}× {item.name}
+                          </span>
+                          <span>{money(item.price, signable.currency)}</span>
+                        </li>
+                      ))}
+                      <li className="gadget-total">
+                        <span>Total</span>
+                        <span>{money(signable.total, signable.currency)}</span>
+                      </li>
+                    </ul>
+                  ) : (
+                    <p className="gadget-meta">It will charge your PayPal only for carts this board signs.</p>
+                  )}
+                </>
+              ) : (
+                <p className="gadget-warn">This board can't read what it's asked to sign, so it won't sign it.</p>
+              )}
               {screen.more > 0 && <p className="gadget-meta">+{screen.more} more waiting</p>}
             </>
           )}
@@ -402,6 +521,23 @@ function VirtualButton() {
       )}
       {serverSpeech && <Hint>Your voice goes to Nemotron ASR on the Huddle machine, and nowhere else.</Hint>}
 
+      {screen?.type === "sign" && (
+        <div className="gadget-actions">
+          <HoldButton ms={HOLD_SIGN_MS} disabled={!board || !signable || signing || (signer !== null && !signer.ok)} onHeld={() => void signScreen()}>
+            {signing ? "Signing…" : "Hold 2 s to sign"}
+          </HoldButton>
+          <button type="button" className="btn" onClick={() => send({ type: "decline", id: screen.id })}>
+            {signable?.kind === "link" ? "Don't link" : "Don't pay"} <span className="muted">(tap)</span>
+          </button>
+        </div>
+      )}
+      {board && (
+        <p className="gadget-key">
+          This board's key: <code>{board.fingerprint}</code>
+          {signer?.ok ? ", held by Huddle" : signer ? ", not taken" : ""}. {board.kept ? "Kept in this browser, and it can't be read out." : "This browser can't keep it, so it's new every visit."}
+        </p>
+      )}
+
       {screen?.type === "approval" && (
         <div className="gadget-actions">
           <button type="button" className="btn btn-primary" onClick={() => send({ type: "answer", id: screen.id, yes: true })}>
@@ -444,6 +580,69 @@ function VirtualButton() {
           </form>
         ))}
     </section>
+  );
+}
+
+/**
+ * A button that does its thing only once it's held for `ms`, as the Huddle button signs on a two-second hold: a
+ * tap, or letting go early, does nothing. Space or Enter held works the same.
+ */
+function HoldButton({ ms, disabled, onHeld, children }: { readonly ms: number; readonly disabled: boolean; readonly onHeld: () => void; readonly children: React.ReactNode }) {
+  const [progress, setProgress] = useState(0);
+  const started = useRef<number | null>(null);
+  const frame = useRef<number | undefined>(undefined);
+  const held = useRef(onHeld);
+  held.current = onHeld;
+  const tick = () => {
+    if (started.current === null) return;
+    const done = Math.min(1, (performance.now() - started.current) / ms);
+    setProgress(done);
+    if (done < 1) {
+      frame.current = requestAnimationFrame(tick);
+      return;
+    }
+    started.current = null;
+    setProgress(0);
+    held.current();
+  };
+  const begin = () => {
+    if (disabled || started.current !== null) return;
+    started.current = performance.now();
+    frame.current = requestAnimationFrame(tick);
+  };
+  const cancel = () => {
+    if (started.current === null) return;
+    started.current = null;
+    if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+    setProgress(0);
+  };
+  useEffect(() => () => {
+    if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+  }, []);
+  return (
+    <button
+      type="button"
+      className="btn btn-primary hold-button"
+      style={{ "--hold": progress } as React.CSSProperties}
+      disabled={disabled}
+      aria-label={`${typeof children === "string" ? children : "Hold to sign"}: keep it held for ${ms / 1000} seconds`}
+      onPointerDown={begin}
+      onPointerUp={cancel}
+      onPointerLeave={cancel}
+      onPointerCancel={cancel}
+      onContextMenu={(event) => event.preventDefault()}
+      onKeyDown={(event) => {
+        if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+          event.preventDefault();
+          begin();
+        }
+      }}
+      onKeyUp={(event) => {
+        if (event.key === " " || event.key === "Enter") cancel();
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

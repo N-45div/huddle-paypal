@@ -14,18 +14,31 @@ interface Shown {
   readonly expires: string;
 }
 
-/** The payment in a text a board signs, when it is one ({"kind":"buy", ...}); null for anything else. */
-function paymentIn(text: string): Shown | null {
+interface Linking {
+  readonly shop: { readonly id: string; readonly name: string };
+  readonly expires: string;
+}
+
+/** What a text a board signs says: a payment ({"kind":"buy", ...}) or linking at a shop ({"kind":"link", ...}); null for anything else. */
+export function signableIn(text: string): ({ readonly kind: "buy" } & Shown) | ({ readonly kind: "link" } & Linking) | null {
   try {
     const value = JSON.parse(text) as Partial<Shown> & { readonly kind?: unknown };
-    if (value.kind !== "buy" || !value.shop || !Array.isArray(value.items) || typeof value.total !== "string" || typeof value.currency !== "string") return null;
-    return value as Shown;
+    if (!value.shop || typeof value.shop.name !== "string" || typeof value.shop.id !== "string" || typeof value.expires !== "string") return null;
+    if (value.kind === "link") return { kind: "link", shop: value.shop, expires: value.expires };
+    if (value.kind !== "buy" || !Array.isArray(value.items) || typeof value.total !== "string" || typeof value.currency !== "string") return null;
+    return value as { readonly kind: "buy" } & Shown;
   } catch {
     return null;
   }
 }
 
-const money = (value: string, currency: string) => (currency === "USD" ? `$${value}` : `${value} ${currency}`);
+/** The payment in a text a board signs, when it is one; null for anything else. */
+function paymentIn(text: string): Shown | null {
+  const signable = signableIn(text);
+  return signable?.kind === "buy" ? signable : null;
+}
+
+export const money = (value: string, currency: string) => (currency === "USD" ? `$${value}` : `${value} ${currency}`);
 
 /**
  * A payment waiting for your board, as the board will show it: the shop (its name and its own address), each

@@ -1542,6 +1542,73 @@ h1 .badge {
   gap: 10px;
 }
 
+/* A payment (or a link) on the virtual board, as the button shows it: the shop, NEW if it hasn't signed for it, each line, the total. */
+.gadget-new {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  color: #1d1d1b;
+  background: #ffd36b;
+}
+
+.gadget-items {
+  width: 100%;
+  max-width: 260px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  text-align: left;
+}
+
+.gadget-items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.gadget-items span:last-child {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.gadget-total {
+  border-top: 1px solid #5a5a54;
+  font-weight: 700;
+}
+
+.gadget-key {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* Fills as it's held; it signs only when full. */
+.hold-button {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.hold-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / 0.28);
+  transform: scaleX(var(--hold, 0));
+  transform-origin: left;
+  pointer-events: none;
+}
+
 .talk-button {
   min-width: 260px;
   min-height: 44px;
