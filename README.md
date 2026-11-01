@@ -167,6 +167,12 @@ speaker ([the firmware, the parts and how to set it up](firmware/huddle-button/R
 - **No Wi-Fi or administrator needed.** It reaches Huddle over its USB cable, through the canvas's **Devices**
   page in Chrome or Edge. Wi-Fi works too. The Devices page also has a virtual button, to try it all without
   the hardware.
+- **Only the board says yes to a payment.** A flow's Pay step prices a cart at a shop and asks your board to
+  sign it. The board shows the shop, each line and the total from the exact text it signs, and signs on a
+  two-second hold. The shop charges your PayPal only for carts a board linked there has signed. To link one,
+  use **Boards that sign** in Devices: the board signs the shop's link text, you say yes on PayPal's page, and
+  PayPal sends you back to Huddle. The virtual button signs too, with a P-256 key this browser makes and can't
+  read back out. That's for trying it; for real money, sign with the button.
 
 ## Shared memory
 
