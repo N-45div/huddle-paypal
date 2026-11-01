@@ -8,7 +8,20 @@ import { alreadySays, type Learner } from "./memory/learn.ts";
 import { Memory } from "./memory/memory.ts";
 import { type Assistant, type Flow, type Step, turnAt } from "./schema.ts";
 import { cartLines, type ShopClient, shopClient, ShopError, type ShopOrder } from "./shop.ts";
-import type { Approval, Note, Run, SignRequest, Store } from "./store.ts";
+import type { Approval, Note, Run, SignRequest, Signer, Store } from "./store.ts";
+
+/** What Huddle keeps with a link to a shop: the board it's for, where PayPal sends you back, then PayPal's page and the PayPal saved. */
+export interface LinkResult {
+  readonly key: string;
+  readonly returnUrl?: string;
+  readonly approveUrl?: string;
+  readonly paypal?: string | null;
+}
+
+function linkResult(request: SignRequest): LinkResult {
+  const result = (request.result ?? {}) as Partial<LinkResult>;
+  return { key: String(result.key ?? ""), ...(typeof result.returnUrl === "string" ? { returnUrl: result.returnUrl } : {}), ...(typeof result.approveUrl === "string" ? { approveUrl: result.approveUrl } : {}), ...(result.paypal !== undefined ? { paypal: result.paypal } : {}) };
+}
 
 /** The setting that turns learning from what you say on ("on") or off. */
 export const LEARNING = "memory.learn";
@@ -149,8 +162,16 @@ export class Engine {
     return approval.runId;
   }
 
-  /** Takes your board's signature of a payment and returns at once; the run carries on in the background. Throws straight away if it isn't taken. */
+  /**
+   * Takes your board's signature of a payment, or of a link to a shop, and returns at once; the run (or the link)
+   * carries on in the background. Throws straight away if it isn't taken.
+   */
   sign(signId: string, signature: string, key: string): string {
+    if (this.store.signRequest(signId)?.kind === "link") {
+      this.linkable(signId, signature, key);
+      void this.signLink(signId, signature, key).catch((error: unknown) => console.error(`[huddle] signature for ${signId}:`, error));
+      return "";
+    }
     const request = this.signable(signId, signature, key);
     const late = expired(parseSignable(request.text), this.now());
     // An expired one still goes through countersign, which fails its step so the run can ask again.
@@ -185,6 +206,12 @@ export class Engine {
     const request = this.store.signRequest(signId);
     if (!request || request.kind !== "buy") throw new Error(`There's no payment ${signId} waiting to be signed.`);
     if (request.status !== "waiting") throw new Error(`That payment was already ${request.status}.`);
+    this.signedBy(request, signature, key);
+    return request;
+  }
+
+  /** The board of yours whose signature of exactly this request's text it is; throws when it isn't one. */
+  private signedBy(request: SignRequest, signature: string, key: string): Signer {
     let board;
     try {
       board = this.store.signer(keyText(key));
@@ -192,8 +219,82 @@ export class Engine {
       board = null;
     }
     if (!board) throw new Error("That key isn't one of your boards'. Add the board in Devices first.");
-    if (!signedBy(request.text, signature, board.key)) throw new Error("That isn't your board's signature of this payment, so it wasn't taken.");
-    return request;
+    const what = request.kind === "link" ? "link" : "payment";
+    if (!signedBy(request.text, signature, board.key)) throw new Error(`That isn't your board's signature of this ${what}, so it wasn't taken.`);
+    return board;
+  }
+
+  // Linking a board to your PayPal at a shop ------------------------------------------------------------
+
+  /**
+   * Starts linking one of your boards to your PayPal at a shop. The shop writes what the board signs to say "this
+   * board pays for my carts here"; it waits for the board like a payment does. `returnUrl` is where PayPal sends
+   * you back once your PayPal is saved with the shop.
+   */
+  async startLink(shopUrl: string, key: string, returnUrl?: string): Promise<SignRequest> {
+    let board;
+    try {
+      board = this.store.signer(keyText(key));
+    } catch {
+      board = null;
+    }
+    if (!board) throw new Error("That key isn't one of your boards'. Add the board in Devices first.");
+    const shop = this.shops(shopUrl);
+    const link = await shop.startLink(board.key);
+    let signable;
+    try {
+      signable = parseSignable(link.text);
+    } catch (error) {
+      throw new Error(`The shop's link can't be signed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (signable.kind !== "link" || signable.id !== link.id) throw new Error("The shop's link isn't a link to sign: it says something else.");
+    if (expired(signable, this.now() + 60_000)) throw new Error("The shop's link doesn't hold long enough to be signed; try again.");
+    return this.store.addSignRequest({ id: link.id, kind: "link", text: link.text, runId: null, stepId: null, shop: shop.url, expires: signable.expires, result: { key: board.key, ...(returnUrl ? { returnUrl } : {}) } });
+  }
+
+  /**
+   * Takes your board's signature of a link and gives it to the shop, which answers with PayPal's page for saving
+   * your PayPal with it: open that next. Taken only from the board the link is for, of exactly its text, in time.
+   */
+  async signLink(signId: string, signature: string, key: string): Promise<SignRequest> {
+    const { request, board, held } = this.linkable(signId, signature, key);
+    if (!this.store.markSigned(signId, signature, board.key)) throw new Error("That link was already signed or answered.");
+    try {
+      const { approveUrl } = await this.shops(request.shop).signedLink(signId, signature, held.returnUrl);
+      if (!approveUrl) throw new Error("The shop didn't say where to save your PayPal with it.");
+      this.store.moveSignRequest(signId, "signed", { status: "signed", result: { ...held, approveUrl } });
+    } catch (error) {
+      this.store.moveSignRequest(signId, "signed", { status: "failed", error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+    return this.store.signRequest(signId)!;
+  }
+
+  /** How a signed link is going at the shop: linked once PayPal has saved your PayPal there, failed if it didn't. */
+  async checkLink(signId: string): Promise<SignRequest> {
+    const request = this.store.signRequest(signId);
+    if (!request || request.kind !== "link") throw new Error(`There's no link ${signId}.`);
+    if (request.status !== "signed") return request;
+    const link = await this.shops(request.shop).link(signId);
+    if (link.status === "linked") this.store.moveSignRequest(signId, "signed", { status: "linked", result: { ...linkResult(request), paypal: link.paypal } });
+    else if (link.status === "cancelled") this.store.moveSignRequest(signId, "signed", { status: "declined", error: "You didn't save your PayPal with the shop, so nothing was linked." });
+    else if (link.status === "failed") this.store.moveSignRequest(signId, "signed", { status: "failed", error: link.error ?? "PayPal didn't save your PayPal with the shop." });
+    return this.store.signRequest(signId)!;
+  }
+
+  /** The waiting link a signature is for, once it's checked: the board it's for, of exactly its text, in time. */
+  private linkable(signId: string, signature: string, key: string): { request: SignRequest; board: Signer; held: LinkResult } {
+    const request = this.store.signRequest(signId);
+    if (!request || request.kind !== "link") throw new Error(`There's no link ${signId} waiting to be signed.`);
+    if (request.status !== "waiting") throw new Error(`That link was already ${request.status}.`);
+    const board = this.signedBy(request, signature, key);
+    const held = linkResult(request);
+    if (held.key !== board.key) throw new Error(`That link is for another of your boards, not ${board.name}.`);
+    if (expired(parseSignable(request.text), this.now())) {
+      this.store.moveSignRequest(signId, "waiting", { status: "expired" });
+      throw new Error("That link expired before your board signed it; start linking again.");
+    }
+    return { request, board, held };
   }
 
   /**
