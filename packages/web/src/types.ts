@@ -38,6 +38,8 @@ export type {
   ToolDetails,
   RunView,
   SignIn,
+  SignerView,
+  SignView,
   Template,
   SandboxRequests,
   SandboxRequestView,

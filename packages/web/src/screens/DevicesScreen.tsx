@@ -13,6 +13,7 @@ import type { Device, DeviceMessage } from "../types.ts";
 import type { UsbScreen } from "../usb-link.ts";
 import { usbSession } from "../usb-session.ts";
 import { openMic, PcmPlayer } from "../voice.ts";
+import { YourBoards } from "./BoardsCard.tsx";
 import { TokenRow } from "./ContactsScreen.tsx";
 
 type Screen = Extract<DeviceMessage, { type: "approval" } | { type: "idle" } | { type: "sign" }>;
@@ -51,11 +52,12 @@ export function DevicesScreen() {
       <header className="page-head">
         <div>
           <h1>Devices</h1>
-          <p className="lede">The Huddle button shows what's waiting for you, takes your yes or no, and starts the flows you put on it. This one works the same, in the browser.</p>
+          <p className="lede">The Huddle button shows what's waiting for you, takes your yes or no, signs payments, and starts the flows you put on it. The virtual one works the same, in the browser.</p>
         </div>
       </header>
       <UsbButton />
       <VirtualButton />
+      <YourBoards />
       <YourDevices />
     </div>
   );
