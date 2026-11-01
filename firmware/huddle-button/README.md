@@ -123,7 +123,9 @@ your PayPal at a shop.
   and the idle screen says "key refused". Remove the board in Devices and add it again to trust the new key.
 - **What it shows is what it signs.** The screen reads the shop, each line and the total from the exact text
   it signs, not from the words sent with it, and the board won't sign a text whose lines don't add up to its
-  total. A shop it hasn't paid before shows as **NEW** in red, so a lookalike stands out.
+  total. A shop it hasn't paid before shows as **NEW** in red, so a lookalike stands out. A cart longer than
+  the screen (six lines) turns its pages every three seconds, and the board signs it only once every page has
+  been shown.
 - **How it signs.** ECDSA P-256 over the SHA-256 of the text's bytes, deterministic (RFC 6979), r and s side
   by side, base64url. Huddle checks the signature, and so does the shop, against the key you linked there,
   before it charges your PayPal.

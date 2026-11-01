@@ -57,6 +57,8 @@ constexpr size_t MIC_FRAME = 1600;                   // 100 ms of samples
 constexpr size_t PLAY_BUFFER = 16000 * 2 * 12;       // 12 s of audio, in PSRAM
 constexpr unsigned long HOLD_YES_MS = 1000;          // how long a hold takes to say yes to an approval
 constexpr unsigned long HOLD_SIGN_MS = 2000;         // a payment takes a longer hold: it's money
+constexpr size_t SIGN_LINES = 6;                     // a payment's lines on one page of the screen
+constexpr unsigned long SIGN_PAGE_MS = 3000;         // a longer cart turns to its next page this often
 
 // ---- State --------------------------------------------------------------------------------------------
 enum class Mode { Connecting, Idle, Approval, Sign, Listening, Thinking };
@@ -109,6 +111,23 @@ std::vector<SignLine> signLines;
 bool signReadable = false, signNew = false, signLink = false;
 int signMore = 0;
 unsigned long signAt = 0;  // when it arrived: a press that began before isn't a signature
+// A cart longer than one page turns its pages by itself, and is signed only once every page has been shown:
+// the board never signs a line it hasn't shown.
+size_t signPage = 0;
+unsigned long signPageAt = 0;
+bool signSeen = false;
+
+size_t signPages() { return signLink ? 1 : (signLines.size() + SIGN_LINES - 1) / SIGN_LINES; }
+
+/** Turns a long cart to its next page, while the button isn't held; the last page shown means every line was. */
+void turnSignPage(unsigned long now) {
+  size_t pages = signPages();
+  if (pages < 2 || now - signPageAt < SIGN_PAGE_MS) return;
+  signPage = (signPage + 1) % pages;
+  signPageAt = now;
+  if (signPage == pages - 1) signSeen = true;
+  redraw = true;
+}
 
 /** A decimal amount as whole cents ("12.50" is 1250), or -1 when it isn't written like one. */
 long centsOf(const String &value) {
@@ -878,9 +897,9 @@ void draw() {
       small(40, "to " + ascii(signShop), FACE);
       small(50, ascii(signShopId) + (signNew ? "  NEW" : ""), signNew ? RECORD : DIM);
       int y = 66;
-      size_t shown = 0;
-      for (const SignLine &line : signLines) {
-        if (shown == 6) break;
+      size_t first = signPage * SIGN_LINES;
+      for (size_t i = first; i < signLines.size() && i < first + SIGN_LINES; i++) {
+        const SignLine &line = signLines[i];
         String price = line.price;
         String left = String(line.qty) + "x " + ascii(line.name);
         size_t room = 21 - price.length() - 1;
@@ -891,11 +910,11 @@ void draw() {
         tft->setCursor(128 - (int)price.length() * 6, y);
         tft->print(price);
         y += 10;
-        shown++;
       }
-      if (signLines.size() > shown) small(y, "+" + String(signLines.size() - shown) + " more", MUTED);
+      if (signPages() > 1) small(y, "lines " + String(first + 1) + "-" + String(min(first + SIGN_LINES, signLines.size())) + " of " + String(signLines.size()), MUTED);
     }
-    small(141, signMore > 0 ? "hold 2s: sign tap: no+" + String(signMore) : "hold 2s: sign  tap: no", FACE);
+    if (!signSeen) small(141, "more lines... tap: no", FACE);
+    else small(141, signMore > 0 ? "hold 2s: sign tap: no+" + String(signMore) : "hold 2s: sign  tap: no", FACE);
     tft->fillRoundRect(8, 153, 112, 5, 2, TRACK);
     return;
   }
@@ -1032,6 +1051,9 @@ void onMessage(uint8_t *payload, size_t length) {
       signId = id;
       signText = doc["text"] | "";
       readSignable();
+      signPage = 0;
+      signPageAt = millis();
+      signSeen = signPages() <= 1;
     }
     mode = Mode::Sign;
     who = "hud";
@@ -1646,7 +1668,8 @@ void readButton() {
   bool forApproval = mode == Mode::Approval && approvalId.length() && downAt >= approvalAt;
   bool forSign = mode == Mode::Sign && signId.length() && downAt >= signAt;
   if (forApproval && down && held > 120) drawHoldBar(held);
-  if (forSign && signReadable && down && held > 120) drawHoldBar(held, HOLD_SIGN_MS);
+  if (forSign && signReadable && signSeen && down && held > 120) drawHoldBar(held, HOLD_SIGN_MS);
+  if (mode == Mode::Sign && !down) turnSignPage(now);
   if (!down && wasDown) {
     if (mode == Mode::Listening) {
       stopListening();
@@ -1666,7 +1689,10 @@ void readButton() {
     } else if (forSign && held > 30) {
       // A payment is signed only by a full two-second hold, and only if the board could read it; anything less is no.
       JsonDocument reply;
-      if (signReadable && held >= HOLD_SIGN_MS) {
+      if (signReadable && !signSeen && held >= HOLD_SIGN_MS) {
+        // Held to sign before every line was shown: neither a signature nor a no. The pages keep turning.
+        logLine("not signed %s: not every line shown yet", signId.c_str());
+      } else if (signReadable && held >= HOLD_SIGN_MS) {
         String signature = boardkey::sign(signText);
         if (signature.length()) {
           reply["type"] = "sign";
