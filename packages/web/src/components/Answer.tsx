@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api, describeError } from "../api.ts";
 import { useApp } from "../app-context.ts";
+import { href } from "../router.ts";
 import type { HeldBy } from "../types.ts";
+import { Link } from "./bits.tsx";
 
 /**
  * Yes / No for one waiting approval. A hand-off ArmorIQ holds is approved there instead: the yes is a link to
@@ -66,7 +68,7 @@ export function AnswerButtons({
       </div>
       {signs && (
         <p className="hint held-hint">
-          <strong>Sign it on your board:</strong> hold its button for a second, or use the virtual board in Devices. Only the board's signature pays; Huddle carries on by itself once it has it.
+          <strong>Sign it on your board:</strong> hold its button for two seconds, or use the virtual board in <Link to={href.devices()}>Devices</Link>. Only the board's signature pays; Huddle carries on by itself once it has it.
         </p>
       )}
       {heldBy && !signs && <p className="hint held-hint">Only {heldBy.by} can let this one through. Huddle carries on by itself once you approve it there.</p>}
