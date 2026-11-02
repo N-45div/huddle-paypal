@@ -452,6 +452,7 @@ export function createApp(options: AppOptions): Hono {
     shop: request.shop,
     expires: request.expires,
     board: request.key ? (store.signer(request.key)?.fingerprint ?? null) : null,
+    signature: request.signature,
     result: request.result,
     error: request.error,
     createdAt: request.createdAt,
@@ -459,9 +460,9 @@ export function createApp(options: AppOptions): Hono {
   });
   app.get("/api/signs", (c) => {
     const waiting = c.req.query("status") === "waiting";
-    const kind = c.req.query("kind");
-    const requests = waiting ? store.waitingSignRequests() : store.signRequests(Math.min(200, Math.max(1, Number(c.req.query("limit") ?? 100) || 100)));
-    return c.json<SignView[]>(requests.filter((request) => !kind || request.kind === kind).map(signView));
+    const kind = c.req.query("kind") === "buy" || c.req.query("kind") === "link" ? (c.req.query("kind") as SignRequest["kind"]) : undefined;
+    const requests = waiting ? store.waitingSignRequests().filter((request) => !kind || request.kind === kind) : store.signRequests(Math.min(200, Math.max(1, Number(c.req.query("limit") ?? 100) || 100)), kind);
+    return c.json<SignView[]>(requests.map(signView));
   });
   // A board's signature of a payment: checked here, again at the shop, and the run carries on in the background.
   // Of a link: given to the shop, which answers with PayPal's page to open next (in the link's result).

@@ -127,6 +127,8 @@ export interface SignView {
   readonly expires: string;
   /** The fingerprint of the board that signed it. */
   readonly board: string | null;
+  /** The board's signature of `text` (P-256 r||s, base64url): anyone with the board's key can check it. */
+  readonly signature: string | null;
   /** The shop's order, once paid; for a link, the board's key, then PayPal's page (approveUrl) and the PayPal saved. */
   readonly result: unknown;
   readonly error: string | null;

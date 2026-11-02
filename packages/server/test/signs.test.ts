@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, it } from "node:test";
-import { Engine, mock, parseFlow, parseSignable, type Payment, type Run, type ShopClient, Store } from "@huddle/core";
+import { Engine, mock, parseFlow, parseSignable, type Payment, type Run, type ShopClient, signedBy, Store } from "@huddle/core";
 import { createApp } from "../src/app.ts";
 
 const TOKEN = "test-token-0123456789";
@@ -75,9 +75,12 @@ describe("payments in the API", () => {
     assert.equal(taken.status, 202);
     assert.equal((await settle(store, run.id)).state, "done");
 
-    const [paid] = (await (await app.request("/api/signs", { headers: auth })).json()) as { status: string; board: string; result: { paypal: { orderId: string } } }[];
+    const [paid] = (await (await app.request("/api/signs", { headers: auth })).json()) as { status: string; board: string; text: string; signature: string; result: { paypal: { orderId: string } } }[];
     assert.equal(paid!.status, "paid");
     assert.equal(paid!.board, signer.fingerprint);
+    assert.equal(signedBy(paid!.text, paid!.signature, mine.key), true, "what the board signed, checkable by anyone with its key");
+    assert.equal(((await (await app.request("/api/signs?kind=buy", { headers: auth })).json()) as unknown[]).length, 1);
+    assert.deepEqual(await (await app.request("/api/signs?kind=link", { headers: auth })).json(), []);
     assert.equal(paid!.result.paypal.orderId, "PAYPAL-ORDER");
     assert.deepEqual(await (await app.request("/api/signs?status=waiting", { headers: auth })).json(), []);
     assert.equal((await app.request("/api/signs")).status, 401, "behind the Huddle token like the rest of /api");

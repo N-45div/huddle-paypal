@@ -571,8 +571,12 @@ export class Store {
     return (this.db.prepare("SELECT * FROM signs WHERE status = 'waiting' ORDER BY created_at, rowid").all() as Row[]).map(toSignRequest);
   }
 
-  signRequests(limit = 100): SignRequest[] {
-    return (this.db.prepare("SELECT * FROM signs ORDER BY created_at DESC, rowid DESC LIMIT ?").all(limit) as Row[]).map(toSignRequest);
+  /** The latest requests, newest first: payments and links, or one kind. */
+  signRequests(limit = 100, kind?: SignRequest["kind"]): SignRequest[] {
+    const rows = kind
+      ? this.db.prepare("SELECT * FROM signs WHERE kind = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(kind, limit)
+      : this.db.prepare("SELECT * FROM signs ORDER BY created_at DESC, rowid DESC LIMIT ?").all(limit);
+    return (rows as Row[]).map(toSignRequest);
   }
 
   /** Records a board's signature, once; false if the request wasn't waiting any more. */
