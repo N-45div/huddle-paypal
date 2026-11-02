@@ -173,6 +173,9 @@ speaker ([the firmware, the parts and how to set it up](firmware/huddle-button/R
   use **Boards that sign** in Devices: the board signs the shop's link text, you say yes on PayPal's page, and
   PayPal sends you back to Huddle. The virtual button signs too, with a P-256 key this browser makes and can't
   read back out. That's for trying it; for real money, sign with the button.
+- **Wallet.** What your boards paid this week and month, where each board is linked, and every payment with
+  PayPal's order and capture ids. Each one keeps the exact text its board signed and the signature, so anyone
+  with the board's key can check what it said yes to.
 
 ## Shared memory
 
