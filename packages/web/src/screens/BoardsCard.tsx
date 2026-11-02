@@ -99,6 +99,8 @@ export function YourBoards() {
     }
   };
 
+  // The newest link per board and shop: starting again leaves the older one behind, so only the newest is opened.
+  const latest = (links.data ?? []).filter((one, index, all) => all.findIndex((other) => held(other).key === held(one).key && other.shop === one.shop) === index);
   const nameOf = (key: string | undefined) => boards.data?.find((board) => board.key === key)?.name ?? "the board";
   const linkedAt = (key: string) => [...new Set((links.data ?? []).filter((one) => one.status === "linked" && held(one).key === key).map(shopName))];
 
@@ -177,9 +179,9 @@ export function YourBoards() {
           ))}
         </ul>
       )}
-      {links.data && links.data.length > 0 && (
+      {latest.length > 0 && (
         <ul className="note-list" aria-label="Links to shops">
-          {links.data.slice(0, 6).map((one) => (
+          {latest.slice(0, 6).map((one) => (
             <li key={one.id} className="note-item">
               <div className="note-text">
                 <p>
