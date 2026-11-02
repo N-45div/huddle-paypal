@@ -274,6 +274,7 @@ export const api = {
   signers: () => call<SignerView[]>("GET", "/signers"),
   removeSigner: (key: string) => call<null>("DELETE", `/signers/${id(key)}`),
   links: () => call<SignView[]>("GET", "/signs?kind=link&limit=20"),
+  payments: () => call<SignView[]>("GET", "/signs?kind=buy&limit=200"),
   startLink: (shop: string, key: string) => call<SignView>("POST", "/links", { shop, key }),
   checkLink: (linkId: string) => call<SignView>("POST", `/links/${id(linkId)}/check`, {}),
   learning: () => call<LearningView>("GET", "/memory/learning"),

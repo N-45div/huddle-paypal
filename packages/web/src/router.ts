@@ -2,7 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * Hash routes, so the built app works from any path the server serves it on:
- *   #/flows  #/flows/:id  #/assistants  #/contacts  #/runs?flow=  #/runs/:id  #/approvals  #/memory  #/devices
+ *   #/flows  #/flows/:id  #/assistants  #/contacts  #/runs?flow=  #/runs/:id  #/approvals  #/memory  #/devices  #/wallet
  *   #/quick  the desktop app's quick-ask bar, without the sidebar
  */
 
@@ -16,6 +16,7 @@ export type Route =
   | { readonly name: "approvals" }
   | { readonly name: "memory" }
   | { readonly name: "devices" }
+  | { readonly name: "wallet" }
   | { readonly name: "quick" };
 
 export function parseRoute(hash: string): Route {
@@ -44,6 +45,8 @@ export function parseRoute(hash: string): Route {
       return { name: "memory" };
     case "devices":
       return { name: "devices" };
+    case "wallet":
+      return { name: "wallet" };
     case "quick":
       return { name: "quick" };
     default:
@@ -64,6 +67,7 @@ export const href = {
   contacts: () => "#/contacts",
   approvals: () => "#/approvals",
   devices: () => "#/devices",
+  wallet: () => "#/wallet",
   memory: () => "#/memory",
 };
 

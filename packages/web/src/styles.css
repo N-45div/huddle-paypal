@@ -3067,6 +3067,12 @@ h1 .badge {
     display: inline;
   }
 
+  /* Every page's icon, the open one's name and the Approvals count, on one line at 375px. */
+  .nav-link {
+    gap: 5px;
+    padding: 6px 6px;
+  }
+
   .table th,
   .table td {
     padding: 10px 12px;
@@ -4469,4 +4475,201 @@ h1 .badge {
 .payment-lines tfoot td {
   border-bottom: 0;
   font-weight: 600;
+}
+
+/* ---------- Wallet ---------- */
+
+.wallet-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.wallet-stat {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.wallet-stat-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.wallet-stat-value {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.wallet-stat-of {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.wallet-stat-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12.5px;
+}
+
+.wallet-print {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.wallet-payments-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.segment {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segment.active {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.wallet-list {
+  margin: 10px 0 12px;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.wallet-item + .wallet-item {
+  border-top: 1px solid var(--border);
+}
+
+.wallet-item summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.wallet-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.wallet-item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wallet-item-sub {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.wallet-item-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.wallet-amount {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.wallet-when {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tone-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.tone-waiting {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.tone-failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.wallet-detail {
+  padding: 0 16px 16px;
+}
+
+.wallet-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.wallet-facts dt {
+  color: var(--muted);
+}
+
+.wallet-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.wallet-signed-label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.wallet-signed {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.wallet-signature code {
+  overflow-wrap: anywhere;
 }
