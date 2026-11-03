@@ -197,9 +197,10 @@ const hud = llmUrl && quickModel
     ])[0]
   : undefined;
 const justAsk = llmUrl && fillModel ? planner({ url: llmUrl, model: fillModel, key: llmKey, fetcher: meter.fetchFor("just ask"), ...(hud ? { wrapUp: hud } : {}) }) : undefined;
-const asker = justAsk ? new Asker(store, engine, router, justAsk) : undefined;
 // Bean & Leaf, the demo shop, with its own database beside Huddle's: Huddle reaches it over HTTP, as any shop.
 const shop = demoShop(process.env, { publicUrl: `${publicUrl}/shop`, db: join(dirname(env("HUDDLE_DB") ?? "huddle.db"), "shop.db") });
+const shopUrl = shop ? `${publicUrl}/shop` : undefined;
+const asker = justAsk ? new Asker(store, engine, router, justAsk, { shop: shopUrl }) : undefined;
 const app = createApp({
   store,
   engine,
@@ -219,7 +220,7 @@ const app = createApp({
   monid: monidKey ? monidCatalog({ key: monidKey, maxUsd: monidMaxUsd }) : undefined,
   // Tidying memory up: the fill-in model reads each slice's kept notes, only when the person asks.
   tidy: llmUrl && fillModel ? (notes) => tidyMemory(notes, { model: { url: llmUrl, model: fillModel, key: llmKey }, fetcher: meter.fetchFor("tidy up") }) : undefined,
-  ...(shop ? { shop: `${publicUrl}/shop` } : {}),
+  ...(shopUrl ? { shop: shopUrl } : {}),
 });
 if (shop) {
   app.get("/shop/", (c) => c.redirect("/shop", 308));
@@ -229,7 +230,7 @@ if (shop) {
 const websockets = createNodeWebSocket({ app });
 const speechUrl = env("HUDDLE_SPEECH_URL");
 const speech = speechUrl ? nemoSpeech({ url: speechUrl, language: env("HUDDLE_SPEECH_LANGUAGE") ?? "auto" }) : undefined;
-deviceRoutes(app, { store, engine, token, version, upgradeWebSocket: websockets.upgradeWebSocket, speech, router, ...(justAsk ? { planner: justAsk } : {}) });
+deviceRoutes(app, { store, engine, token, version, upgradeWebSocket: websockets.upgradeWebSocket, speech, router, ...(justAsk ? { planner: justAsk } : {}), ...(shopUrl ? { shop: shopUrl } : {}) });
 const web = env("HUDDLE_WEB") ?? fileURLToPath(new URL("../../web/dist", import.meta.url));
 const built = existsSync(join(web, "index.html"));
 app.use("*", webApp(web));

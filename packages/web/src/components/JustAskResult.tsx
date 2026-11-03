@@ -69,11 +69,16 @@ export function JustAskResult({ asked, question, onAsk }: { readonly asked: AskR
           {working.length ? `${working.map((who) => who.name).join(" and ")} ${working.length > 1 ? "are" : "is"} on it…` : "On it…"}
         </p>
       )}
-      {run?.state === "waiting" && (
-        <p className="hint">
-          Waiting for your OK: <Link to={href.approvals()}>answer it in Approvals</Link>, or on the button.
-        </p>
-      )}
+      {run?.state === "waiting" &&
+        (run.waiting?.signs ? (
+          <p className="hint">
+            <strong>{run.waiting.message}.</strong> Nothing is paid until you sign it on your board (a two-second hold), or on the virtual board in <Link to={href.devices()}>Devices</Link>.
+          </p>
+        ) : (
+          <p className="hint">
+            Waiting for your OK: <Link to={href.approvals()}>answer it in Approvals</Link>, or on the button.
+          </p>
+        ))}
       {run?.state === "failed" && <ErrorNote message={run.error ?? "The run stopped."} />}
       {run?.state === "declined" && <p className="hint">You said no, so it stopped there.</p>}
       {answer && (

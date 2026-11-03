@@ -213,6 +213,8 @@ export interface DeviceHubOptions {
   readonly router?: Router;
   /** "Just ask" on the button: works out which saved flow, assistant or team does what was said (with a router). */
   readonly planner?: Planner;
+  /** The demo shop's address, when Huddle opens it: Just ask can buy there, for your board to sign. */
+  readonly shop?: string;
 }
 
 const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -231,7 +233,7 @@ export class DeviceHub {
     this.now = options.now ?? Date.now;
     this.speech = options.speech ?? null;
     this.router = options.router ?? null;
-    this.asker = options.planner && options.router ? new Asker(store, engine, options.router, options.planner) : null;
+    this.asker = options.planner && options.router ? new Asker(store, engine, options.router, options.planner, { ...(options.shop ? { shop: options.shop } : {}) }) : null;
   }
 
   /** The screen: a payment waiting for the board's signature first, then the oldest approval, else today at a glance. */
@@ -695,12 +697,14 @@ export function deviceRoutes(
     readonly speech?: Speech;
     readonly router?: Router;
     readonly planner?: Planner;
+    readonly shop?: string;
   },
 ): DeviceHub {
   const hub = new DeviceHub(options.store, options.engine, {
     ...(options.speech ? { speech: options.speech } : {}),
     ...(options.router ? { router: options.router } : {}),
     ...(options.planner ? { planner: options.planner } : {}),
+    ...(options.shop ? { shop: options.shop } : {}),
   });
   app.get(
     "/devices/ws",

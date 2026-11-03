@@ -329,7 +329,7 @@ export function mcpRoutes(options: AppOptions): Hono {
         await settled(store, asked.run.runId, waitMs);
         const result = runResult(store.run(asked.run.runId)!, caller);
         const who = asked.plan.team.map((member) => member.name).join(", then ");
-        const plan = asked.plan.use === "flow" ? `Ran the "${asked.run.flow}" flow.` : `${asked.plan.say || "Put a team together."} (${who})`;
+        const plan = asked.plan.use === "flow" ? `Ran the "${asked.run.flow}" flow.` : asked.plan.use === "buy" ? asked.plan.say || "Put a cart together for the owner's board." : `${asked.plan.say || "Put a team together."} (${who})`;
         return { ...result, content: [{ type: "text", text: `${plan}\n\n${result.content[0]?.text ?? ""}` }] };
       } catch (error) {
         if (error instanceof NoAnswer) return text(error.message, true);
