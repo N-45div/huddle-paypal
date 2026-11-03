@@ -114,6 +114,11 @@ export interface SignerView {
   readonly lastSignedAt: string | null;
 }
 
+/** What a shop sells that fits a search: the shop (its address, and its id and name as boards see them), and products. */
+export type { Found as FoundView } from "./shops.ts";
+/** A cart put together from outside the canvas: its run, and the payment now waiting for your board. */
+export type { Bought as BoughtView } from "./shops.ts";
+
 /** Something your board signed, or is asked to: a payment or a link to a shop, and what came of it. */
 export interface SignView {
   readonly id: string;
@@ -293,6 +298,9 @@ export interface SandboxRequests {
  *   POST   /api/signs/:id { signature, key } -> 202 { runId }    (a board's signature of a payment, raw P-256 r||s and key, base64url)
  *                                           -> SignView          (of a link: result.approveUrl is PayPal's page to open next)
  *   POST   /api/links { shop, key }        -> 201 SignView        (links a board at a shop: the shop's text for it to sign)
+ *   GET    /api/shops                      -> string[]            (the shops you have, by address: the demo shop, then your shop assistants')
+ *   GET    /api/shops/search?q=&shop=      -> FoundView[]         (what fits, at one shop or each of yours)
+ *   POST   /api/shops/buy { items, shop?, why?, via? } -> 202 BoughtView  (a cart for your board to sign; nothing is paid before it does)
  *   POST   /api/links/:id/check            -> SignView            (how it went at the shop: linked once PayPal saved yours)
  *   GET    /api/templates                  -> Template[]          (the example flows, with what each still needs here)
  *   GET    /api/devices                    -> Device[]

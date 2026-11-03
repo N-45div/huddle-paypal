@@ -131,6 +131,11 @@ export class Engine {
   }
 
   /** Starts a run and returns its id at once; the run carries on in the background (for the server). */
+  /** The shop at an address, reached the way a pay step reaches it. */
+  shop(url: string): ShopClient {
+    return this.shops(url);
+  }
+
   launch(flow: Flow, input: string, flowId: string | null = null, startedBy?: StartedBy, images: readonly string[] = []): string {
     const run = this.store.createRun(flow, input, flowId, images);
     if (startedBy) this.store.log(run.id, "trigger", "started", startedBy);

@@ -7,11 +7,12 @@ import { type EmailOptions, emailRoutes } from "./email.ts";
 import { mcpRoutes, toolNames } from "./mcp.ts";
 import { routerRoutes } from "./router.ts";
 import { bearerOf, same } from "./auth.ts";
-import type { ApiError, AskReply, FlowView, Info, LearningView, PresentedView, RouterUsage, RouterView, RunDetail, RunSummary, SignerView, SignView, SpendView, WaitingApproval } from "./api-types.ts";
+import type { ApiError, AskReply, FlowView, Info, LearningView, PresentedView, RouterUsage, RouterView, BoughtView, FoundView, RunDetail, RunSummary, SignerView, SignView, SpendView, WaitingApproval } from "./api-types.ts";
 import type { Asker } from "./just-ask.ts";
 import { CONNECTORS } from "./connectors-info.ts";
 import type { MonidCatalog } from "./monid.ts";
 import { noSandboxes, type SandboxInbox, Stale } from "./sandbox-requests.ts";
+import { knownShops, linesFrom, pickShop, searchShops, startBuy } from "./shops.ts";
 import { readTemplates, type Template } from "./templates.ts";
 
 /**
@@ -478,6 +479,39 @@ export function createApp(options: AppOptions): Hono {
       return bad(c, error instanceof Error ? error.message : String(error), 409);
     }
   });
+  // Shopping from outside the canvas (a browser agent through WebMCP, say): search the shops you have, and put a
+  // cart together that waits for your board. Nothing here pays: only the board's signature does.
+  const shops = () => knownShops(store, options.shop);
+  app.get("/api/shops", (c) => c.json<string[]>(shops()));
+  app.get("/api/shops/search", async (c) => {
+    const query = (c.req.query("q") ?? "").trim();
+    try {
+      pickShop(shops(), c.req.query("shop") || shops()[0]);
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error));
+    }
+    try {
+      return c.json<FoundView[]>(await searchShops(engine, shops(), query, c.req.query("shop")));
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 502);
+    }
+  });
+  app.post("/api/shops/buy", async (c) => {
+    const { shop, items, why, via } = await body(c);
+    try {
+      linesFrom(items);
+      pickShop(shops(), shop);
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error));
+    }
+    try {
+      const bought = await startBuy(store, engine, shops(), { shop, items, why }, { name: "You", tier: "owner", via: via === "webmcp" ? "webmcp" : "api" });
+      return c.json<BoughtView>(bought, 202);
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 502);
+    }
+  });
+
   // Linking a board to your PayPal at a shop: the shop writes what the board signs; PayPal sends you back to Devices.
   app.post("/api/links", async (c) => {
     const { shop, key } = await body(c);
