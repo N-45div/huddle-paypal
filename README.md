@@ -147,6 +147,17 @@ From Claude Code, Cursor or any MCP client, the `just_ask` tool takes the same s
 answer (see [Use Huddle from Claude, Cursor or any MCP client](#use-huddle-from-claude-cursor-or-any-mcp-client)).
 Just ask needs a model to plan with: `NEBIUS_API_KEY`, or `HUDDLE_LLM_URL` and `HUDDLE_LLM_MODEL`.
 
+It buys too. Just ask sees what your shops sell, so "buy two bags of house blend and a bag of decaf" becomes a
+cart at that shop, waiting for your board to sign it. Hud says what's in it; nothing is paid until you sign.
+
+### For a browser's AI agent (WebMCP)
+
+Where the browser has [WebMCP](https://github.com/webmachinelearning/webmcp), the canvas hands its agent
+Huddle's own tools, so it calls them instead of clicking around: `shop_search`, `shop_buy`, `list_payments`
+and `just_ask`. A cart it puts together waits for your board like any other. Search results are marked as
+the shop's words, so the agent reads them as data. WebMCP is new: Chrome and Edge have it in an origin trial,
+or behind `about:flags#enable-webmcp-testing`; other browsers just don't see the tools.
+
 ## The Huddle button
 
 A button on your desk for your assistants, built on an ESP32-S3 camera board with a 1.8" screen, a mic and a
@@ -626,6 +637,10 @@ filled in, under **Use it from any app**. Then these tools appear:
   your token only, since your assistants act for you.
 - **`just_ask`** takes what's needed in a sentence and has Huddle work out which flow, assistant or team of
   them does it ([Just ask](#just-ask)), waiting for the answer like a flow tool. It's for your token only too.
+- **`shop_search`** and **`shop_buy`**, with your token, when you have a shop (the demo shop, or a shop
+  assistant). The agent finds what your shops sell and puts a cart together. The cart only goes to your
+  board: the tool answers that it's waiting for your signature, and nothing is paid until you sign it.
+  Only shops you already have: a tool call can't send Huddle to buy somewhere new.
 
 Approvals still come to you. A run that reaches an approval comes back *waiting*, saying what for, with
 its run id; answer it in **Approvals**, and `get_run` then has the answer. A run that takes longer than
