@@ -16,6 +16,7 @@ import { RunScreen } from "./screens/RunScreen.tsx";
 import { RunsScreen } from "./screens/RunsScreen.tsx";
 import { QuickScreen } from "./screens/QuickScreen.tsx";
 import { DevicesScreen } from "./screens/DevicesScreen.tsx";
+import { startWebMcp } from "./webmcp.ts";
 import { WalletScreen } from "./screens/WalletScreen.tsx";
 import type { Info } from "./types.ts";
 
@@ -45,6 +46,10 @@ export function App() {
   // The stream carries the token only when the server asks for one.
   const streamWithToken = info ? info.auth : readToken() !== "";
   useEffect(() => startEvents(streamWithToken), [streamWithToken, authVersion]);
+  // Huddle's tools for the browser's AI agent, where the browser has WebMCP.
+  const justAsk = info?.justAsk ?? false;
+  const demoShop = info?.shop ?? null;
+  useEffect(() => (info ? startWebMcp({ justAsk, shop: demoShop }) : undefined), [Boolean(info), justAsk, demoShop, authVersion]);
 
   // Everything waiting on the person: the flows' approvals, what OpenShell sandboxes are asking for, and PACT sign-ins.
   const refreshWaiting = useDebounced(() => {

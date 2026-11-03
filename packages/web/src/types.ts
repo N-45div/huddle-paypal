@@ -38,6 +38,8 @@ export type {
   ToolDetails,
   RunView,
   SignIn,
+  BoughtView,
+  FoundView,
   SignerView,
   SignView,
   Template,
