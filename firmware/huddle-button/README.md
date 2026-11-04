@@ -110,8 +110,8 @@ arduino-cli monitor -p COM5 -c baudrate=115200
 
 ## Signing payments
 
-The board signs two things and nothing else: the payments a flow's Pay step writes, and linking itself to
-your PayPal at a shop.
+The board signs three things and nothing else: the payments a flow's Pay step writes, linking itself to
+your PayPal at a shop, and allowances.
 
 - **Its own key.** The first time it starts, the board makes a P-256 key with the chip's own entropy source
   on, before I2S starts, and keeps it in its flash. It says only the public half to Huddle, in hello, and the
@@ -130,6 +130,10 @@ your PayPal at a shop.
   by side, base64url. Huddle checks the signature, and so does the shop, against the key you linked there,
   before it charges your PayPal.
 - **A two-second hold.** Signing takes twice the hold of a yes; anything shorter declines.
+- **Allowances.** An allowance lets Huddle pay at one shop on its own: up to an amount a time and an amount
+  a day, week or month, until a date at most 31 days away. The board shows each of those, the shop and what
+  it's for, and signs it the same way. Payments under it are signed by Huddle's own key, and the shop holds
+  them to the limits; the board is told of each one.
 - **Linking at a shop.** In Devices, **Link at the shop** asks the shop for a short text naming it; the board
   shows "Link this board at" the shop and signs it the same way. Huddle then opens PayPal's page, where you
   save your PayPal with the shop. From then on that shop charges your PayPal only for carts this board signs.

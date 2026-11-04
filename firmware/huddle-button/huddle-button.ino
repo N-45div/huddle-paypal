@@ -109,6 +109,9 @@ struct SignLine {
 String signId, signText, signFlow, signShop, signShopId, signTotal, signCurrency, signProblem;
 std::vector<SignLine> signLines;
 bool signReadable = false, signNew = false, signLink = false;
+// An allowance: Huddle may pay at this shop on its own, up to signEach a time and signTotal a signPer, until signUntil.
+bool signAllow = false;
+String signEach, signPer, signFor, signUntil;
 int signMore = 0;
 unsigned long signAt = 0;  // when it arrived: a press that began before isn't a signature
 // A cart longer than one page turns its pages by itself, and is signed only once every page has been shown:
@@ -117,7 +120,7 @@ size_t signPage = 0;
 unsigned long signPageAt = 0;
 bool signSeen = false;
 
-size_t signPages() { return signLink ? 1 : (signLines.size() + SIGN_LINES - 1) / SIGN_LINES; }
+size_t signPages() { return signLink || signAllow ? 1 : (signLines.size() + SIGN_LINES - 1) / SIGN_LINES; }
 
 /** Turns a long cart to its next page, while the button isn't held; the last page shown means every line was. */
 void turnSignPage(unsigned long now) {
@@ -169,14 +172,30 @@ void readSignable() {
   }
   String kind = inner["kind"] | "";
   signLink = kind == "link";
+  signAllow = kind == "allow";
   signShop = inner["shop"]["name"] | "";
   signShopId = inner["shop"]["id"] | "";
-  if (!signShopId.length() || (kind != "buy" && !signLink)) {
+  if (!signShopId.length() || (kind != "buy" && !signLink && !signAllow)) {
     signProblem = "it isn't a payment this board knows";
     return;
   }
   signNew = !knownShop(signShopId);
   if (signLink) {
+    signReadable = true;
+    return;
+  }
+  if (signAllow) {
+    signFor = inner["for"] | "";
+    signEach = inner["each"] | "";
+    signTotal = inner["total"] | "";
+    signPer = inner["per"] | "";
+    signCurrency = inner["currency"] | "";
+    signUntil = String(inner["expires"] | "").substring(0, 10);
+    long each = centsOf(signEach), total = centsOf(signTotal);
+    if (each <= 0 || total <= 0 || each > total || (signPer != "day" && signPer != "week" && signPer != "month")) {
+      signProblem = "its limits don't make sense";
+      return;
+    }
     signReadable = true;
     return;
   }
@@ -886,6 +905,23 @@ void draw() {
       small(44, ascii(signShop), AMBER, 2);
       small(68, ascii(signShopId) + (signNew ? "  NEW" : ""), signNew ? RECORD : DIM);
       small(84, "to this board?", FACE);
+    } else if (signAllow) {
+      // What Huddle may spend without asking: a time, then in all a day, week or month, where, for what, until when.
+      String money = signCurrency == "USD" ? "$" : "";
+      String after = signCurrency == "USD" ? "" : " " + signCurrency;
+      small(18, "Let Huddle spend, alone:", FACE);
+      tft->setTextSize(2);
+      tft->setTextColor(AMBER);
+      String each = money + signEach + after;
+      tft->setCursor(max(0, (128 - (int)each.length() * 12) / 2), 30);
+      tft->print(each);
+      tft->setTextSize(1);
+      small(48, "a time, at most", FACE);
+      small(60, money + signTotal + after + " a " + signPer, AMBER);
+      small(74, "at " + ascii(signShop), FACE);
+      small(84, ascii(signShopId) + (signNew ? "  NEW" : ""), signNew ? RECORD : DIM);
+      small(98, "for " + ascii(signFor), FACE, 2);
+      small(120, "until " + signUntil, DIM);
     } else {
       // The total, big; then who's paid (NEW when this board hasn't paid them before), then each line.
       String amount = signCurrency == "USD" ? "$" + signTotal : signTotal + " " + signCurrency;
@@ -1069,8 +1105,8 @@ void onMessage(uint8_t *payload, size_t length) {
   } else if (type == "payment") {
     // Paid; linking (a link the shop handed to PayPal: you finish in Huddle); or failed, with why.
     String status = doc["status"] | "";
-    bool went = status == "paid" || status == "linking";
-    replyFlow = status == "paid" ? "Paid" : status == "linking" ? "Signed" : "Didn't go through";
+    bool went = status == "paid" || status == "linking" || status == "set";
+    replyFlow = status == "paid" ? "Paid" : status == "linking" ? "Signed" : status == "set" ? "Allowance set" : "Didn't go through";
     replyText = doc["line"] | "";
     replyUntil = millis() + 8000;
     mood = went ? Mood::Happy : Mood::Oops;

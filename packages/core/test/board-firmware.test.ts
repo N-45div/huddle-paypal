@@ -69,6 +69,14 @@ describe("the button's own signing code", { skip }, () => {
     assert.equal(signedBy(text, said.signatures[0], board(text).key), false, "another board's key doesn't fit it");
   });
 
+  it("signs an allowance the same way", () => {
+    const agent = board("agent").key;
+    const text = signableText({ v: 1, kind: "allow", id: "allow_00112233445566778899aabb", shop: { id: "localhost:7700", name: "Bean & Leaf" }, for: "Groceries", agent, each: "20.00", total: "50.00", per: "week", currency: "USD", expires: "2026-12-04T10:00:00Z" });
+    parseSignable(text);
+    const said = board(text);
+    assert.equal(signedBy(text, said.signatures[0], said.key), true);
+  });
+
   it("signs a link to a shop the same way", () => {
     const text = signableText({ v: 1, kind: "link", id: "link_00112233445566778899aabb", shop: { id: "localhost:7700", name: "Bean & Leaf" }, expires: "2026-11-02T10:15:00Z" });
     const said = board(text);
