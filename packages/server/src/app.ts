@@ -1,4 +1,4 @@
-import { keyText, nextRun, receiptOf } from "@huddle/core";
+import { activeAllowances, type Allowance, decimal, fingerprint, keyText, nextRun, parseSignable, receiptOf } from "@huddle/core";
 import { type Assistant, Assistants, type Change, CONTACT_TIERS, type ContactTier, type Engine, Flow, type MemoryHit, type Note, ollamaModels, OwnLimit, type PactIdentity, tokenFactoryModels, vllmModels, periodStart, type Presenter, present, rulesPresenter, VIEW_KINDS, type ViewKind, type ViewWriter, type Router, type SavedFlow, SensitiveNote, type SignIns, type SignRequest, type Store, type Tidy, tidyMemory, LEARNING } from "@huddle/core";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -7,12 +7,13 @@ import { type EmailOptions, emailRoutes } from "./email.ts";
 import { mcpRoutes, toolNames } from "./mcp.ts";
 import { routerRoutes } from "./router.ts";
 import { bearerOf, same } from "./auth.ts";
-import type { ApiError, AskReply, FlowView, Info, LearningView, PresentedView, RouterUsage, RouterView, BoughtView, FoundView, RunDetail, RunSummary, SignerView, SignView, SpendView, WaitingApproval } from "./api-types.ts";
+import type { ApiError, AskReply, FlowView, Info, LearningView, PresentedView, RouterUsage, RouterView, AllowanceView, BoughtView, FoundView, RunDetail, RunSummary, SignerView, SignView, SpendView, WaitingApproval } from "./api-types.ts";
 import type { Asker } from "./just-ask.ts";
 import { CONNECTORS } from "./connectors-info.ts";
 import type { MonidCatalog } from "./monid.ts";
 import { noSandboxes, type SandboxInbox, Stale } from "./sandbox-requests.ts";
 import { knownShops, linesFrom, pickShop, searchShops, startBuy } from "./shops.ts";
+import { type Limits, limitsFrom, type LimitsWriter } from "./allowance-words.ts";
 import { readTemplates, type Template } from "./templates.ts";
 
 /**
@@ -63,6 +64,8 @@ export interface AppOptions {
   readonly asker?: Asker;
   /** The demo shop's address, when Huddle opens it: offered first for linking a board. */
   readonly shop?: string;
+  /** Writes an allowance's exact limits from what you say, when a model is set up. */
+  readonly limits?: LimitsWriter;
 }
 
 /** A flow from a request body, or the problems with it, one line each. */
@@ -139,6 +142,7 @@ export function createApp(options: AppOptions): Hono {
       present: { chooser: presenting.presenter.name, writer: presenting.writer?.model ?? null },
       justAsk: Boolean(options.asker),
       shop: options.shop ?? null,
+      allowanceWords: Boolean(options.limits),
     }),
   );
 
@@ -474,11 +478,79 @@ export function createApp(options: AppOptions): Hono {
     if (!request) return bad(c, "There's nothing to sign by that id.", 404);
     try {
       if (request.kind === "link") return c.json(signView(await engine.signLink(request.id, signature, key)));
+      if (request.kind === "allow") return c.json(signView(await engine.signAllowance(request.id, signature, key)));
       return c.json({ runId: engine.sign(request.id, signature, key) }, 202);
     } catch (error) {
       return bad(c, error instanceof Error ? error.message : String(error), 409);
     }
   });
+  // Allowances: your board says once that Huddle may pay at a shop on its own, within limits it shows you.
+  const allowanceView = (request: SignRequest): AllowanceView => {
+    const allowance = parseSignable(request.text) as Allowance;
+    const active = request.status === "active" ? activeAllowances(store).find((one) => one.request.id === request.id) : undefined;
+    const board = (request.result as { key?: unknown } | null)?.key;
+    return {
+      id: request.id,
+      status: request.status === "active" && !active ? "expired" : request.status,
+      for: allowance.for,
+      shop: { ...allowance.shop, url: request.shop },
+      each: allowance.each,
+      total: allowance.total,
+      per: allowance.per,
+      currency: allowance.currency,
+      expires: allowance.expires,
+      spent: active ? decimal(active.spent) : null,
+      board: typeof board === "string" ? (store.signer(board)?.fingerprint ?? null) : null,
+      agent: fingerprint(allowance.agent),
+      text: request.text,
+      error: request.error,
+      createdAt: request.createdAt,
+      signedAt: request.signedAt,
+    };
+  };
+  app.get("/api/allowances", (c) => c.json<AllowanceView[]>(store.signRequests(50, "allow").map(allowanceView)));
+  app.post("/api/allowances", async (c) => {
+    const given = await body(c);
+    const boards = store.signers();
+    const key = typeof given.key === "string" ? given.key : boards.length === 1 ? boards[0]!.key : null;
+    if (!key) return bad(c, boards.length ? "Say which board signs it, by its key." : "Add a board first: the virtual button in Devices is one as soon as it connects.");
+    let shopUrl: string;
+    try {
+      shopUrl = pickShop(shops(), given.shop);
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error));
+    }
+    let limits: Limits;
+    if (typeof given.said === "string" && given.said.trim()) {
+      if (!options.limits) return bad(c, "Writing an allowance from your words needs a model: set NEBIUS_API_KEY, or HUDDLE_LLM_URL and HUDDLE_LLM_MODEL. Or give the limits.", 501);
+      try {
+        limits = await options.limits(given.said);
+      } catch (error) {
+        return bad(c, error instanceof Error ? error.message : String(error), 502);
+      }
+    } else {
+      try {
+        limits = limitsFrom(given);
+      } catch (error) {
+        return bad(c, error instanceof Error ? error.message : String(error));
+      }
+    }
+    try {
+      return c.json<AllowanceView>(allowanceView(await engine.startAllowance(shopUrl, key, limits)), 201);
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 409);
+    }
+  });
+  app.post("/api/allowances/:id/stop", async (c) => {
+    const request = store.signRequest(c.req.param("id"));
+    if (!request || request.kind !== "allow") return bad(c, "There's no allowance by that id.", 404);
+    try {
+      return c.json<AllowanceView>(allowanceView(await engine.stopAllowance(request.id)));
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 502);
+    }
+  });
+
   // Shopping from outside the canvas (a browser agent through WebMCP, say): search the shops you have, and put a
   // cart together that waits for your board. Nothing here pays: only the board's signature does.
   const shops = () => knownShops(store, options.shop);

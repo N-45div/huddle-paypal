@@ -41,6 +41,33 @@ export interface Info {
   readonly justAsk: boolean;
   /** The demo shop's address, when this Huddle opens it (at /shop). */
   readonly shop: string | null;
+  /** Whether an allowance can be written from your words (a model is set up). */
+  readonly allowanceWords: boolean;
+}
+
+/**
+ * An allowance: your board said once that Huddle may pay at a shop on its own, within these limits, until it ends.
+ * `spent` is what's gone out under it in the current day, week or month, while it's active.
+ */
+export interface AllowanceView {
+  readonly id: string;
+  readonly status: "waiting" | "signed" | "paid" | "linked" | "active" | "stopped" | "declined" | "expired" | "failed";
+  readonly for: string;
+  readonly shop: { readonly id: string; readonly name: string; readonly url: string };
+  readonly each: string;
+  readonly total: string;
+  readonly per: "day" | "week" | "month";
+  readonly currency: string;
+  readonly expires: string;
+  readonly spent: string | null;
+  /** The fingerprint of the board it's for, and of Huddle's own key it names. */
+  readonly board: string | null;
+  readonly agent: string;
+  /** Exactly what the board signs. */
+  readonly text: string;
+  readonly error: string | null;
+  readonly createdAt: string;
+  readonly signedAt: string | null;
 }
 
 /** POST /api/ask (Just ask): the plan, and the run it started, or the one assistant's answer. */
@@ -298,6 +325,9 @@ export interface SandboxRequests {
  *   POST   /api/signs/:id { signature, key } -> 202 { runId }    (a board's signature of a payment, raw P-256 r||s and key, base64url)
  *                                           -> SignView          (of a link: result.approveUrl is PayPal's page to open next)
  *   POST   /api/links { shop, key }        -> 201 SignView        (links a board at a shop: the shop's text for it to sign)
+ *   GET    /api/allowances                 -> AllowanceView[]     (yours, newest first, with what's been spent under each)
+ *   POST   /api/allowances { said } | { for, each, total, per, days }, shop?, key? -> 201 AllowanceView  (for your board to sign)
+ *   POST   /api/allowances/:id/stop        -> AllowanceView       (Huddle pays nothing more under it, and tells the shop)
  *   GET    /api/shops                      -> string[]            (the shops you have, by address: the demo shop, then your shop assistants')
  *   GET    /api/shops/search?q=&shop=      -> FoundView[]         (what fits, at one shop or each of yours)
  *   POST   /api/shops/buy { items, shop?, why?, via? } -> 202 BoughtView  (a cart for your board to sign; nothing is paid before it does)

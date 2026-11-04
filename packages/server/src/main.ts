@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { demoShop } from "@huddle/shop";
+import { limitsWriter } from "./allowance-words.ts";
 import { Assistants, type Budget, currentModel, isTokenFactory, DEFAULT_MAX_USD, defaultConnectors, dollars, embedder, Engine, factChecker, jevJudge, jevPresenter, type Judge, Memory, Meter, modelJudge, modelPresenter, NEMOTRON, OpenShell, openshell, OWN_CALLS_PER_MINUTE, PactIdentity, pact, parseBudget, RECALL_BUDGET, refreshTokenFactoryPrices, reranker, Router, TOKEN_FACTORY_URL, rulesPresenter, type Guard, guardFromEnv, nemoSpeech, noteTaker, SignIns, Store, storedGrants, tidyMemory, viewWriter } from "@huddle/core";
 import { createApp } from "./app.ts";
 import { describer } from "./describe.ts";
@@ -221,6 +222,7 @@ const app = createApp({
   // Tidying memory up: the fill-in model reads each slice's kept notes, only when the person asks.
   tidy: llmUrl && fillModel ? (notes) => tidyMemory(notes, { model: { url: llmUrl, model: fillModel, key: llmKey }, fetcher: meter.fetchFor("tidy up") }) : undefined,
   ...(shopUrl ? { shop: shopUrl } : {}),
+  limits: llmUrl && fillModel ? limitsWriter({ url: llmUrl, model: fillModel, key: llmKey, fetcher: meter.fetchFor("allowance") }) : undefined,
 });
 if (shop) {
   app.get("/shop/", (c) => c.redirect("/shop", 308));

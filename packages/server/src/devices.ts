@@ -79,7 +79,7 @@ export type ToDevice =
    * What came of a payment this board signed: paid, or failed with why. Of a link: linking, once the shop has
    * handed it to PayPal (you say yes on PayPal's page, from Devices), or failed.
    */
-  | { readonly type: "payment"; readonly id: string; readonly status: "paid" | "linking" | "failed"; readonly line: string }
+  | { readonly type: "payment"; readonly id: string; readonly status: "paid" | "linking" | "set" | "failed"; readonly line: string }
   /** `assistant`: who'll answer (the flow's last assistant step), so the button can show its Huddler. */
   | { readonly type: "started"; readonly runId: string; readonly flow: string; readonly assistant: Who | null }
   /** "Just ask": what Huddle will do with what you said, said out loud too; `team`, who'll do it, in order. */
@@ -419,19 +419,40 @@ export class DeviceHub {
         const request = this.store.signRequest(id);
         if (!request) continue;
         const handedOn = request.kind === "link" && request.status === "signed" && typeof (request.result as { approveUrl?: unknown } | null)?.approveUrl === "string";
-        if (request.status !== "paid" && request.status !== "failed" && !handedOn) continue;
+        const allowed = request.kind === "allow" && request.status === "active";
+        if (request.status !== "paid" && request.status !== "failed" && !handedOn && !allowed) continue;
         signedHere.delete(id);
-        const status = request.status === "failed" ? "failed" : handedOn ? "linking" : "paid";
+        const status = request.status === "failed" ? "failed" : handedOn ? "linking" : allowed ? "set" : "paid";
         let line = status === "failed" ? `It didn't go through: ${request.error ?? "the shop said no"}` : status === "linking" ? "Signed. Finish in Huddle's Devices, on PayPal's page." : "Paid.";
         try {
           const signed = parseSignable(request.text);
           if (status === "paid" && signed.kind === "buy") line = `Paid ${amountText(signed.total, signed.currency)} to ${signed.shop.name} with PayPal.`;
           if (status === "linking") line = `Signed. To finish, say yes on PayPal's page in Huddle's Devices, and ${signed.shop.name} is linked.`;
+          if (status === "set" && signed.kind === "allow") line = `Allowance set: Huddle may spend up to ${amountText(signed.each, signed.currency)} a time and ${amountText(signed.total, signed.currency)} a ${signed.per} at ${signed.shop.name}.`;
         } catch {
           // Said plainly, then.
         }
         send({ type: "payment", id, status, line });
         void say(line);
+      }
+      tellAllowed();
+    };
+    /** Payments Huddle made under an allowance while this board was on: it's told each, though it signed none of them. */
+    const since = new Date(this.now()).toISOString();
+    const toldAllowed = new Set<string>();
+    const tellAllowed = () => {
+      for (const request of this.store.signRequests(20, "buy")) {
+        if (request.status !== "paid" || (request.signedAt ?? "") < since || toldAllowed.has(request.id)) continue;
+        try {
+          const payment = parseSignable(request.text);
+          if (payment.kind !== "buy" || !payment.allow) continue;
+          toldAllowed.add(request.id);
+          const line = `Huddle paid ${amountText(payment.total, payment.currency)} to ${payment.shop.name} under your allowance.`;
+          send({ type: "payment", id: request.id, status: "paid", line });
+          void say(line);
+        } catch {
+          // Not a payment it can read: nothing to tell.
+        }
       }
     };
     const onChange = (change: Change) => {
