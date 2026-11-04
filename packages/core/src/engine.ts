@@ -1,7 +1,9 @@
 import { evaluate } from "./condition.ts";
 import { type Connector, memoryText, type Reply } from "./connector.ts";
 import { type Budget, budgetName, dollars, periodStart, priceOf, spendOf } from "./cost.ts";
-import { amountText, expired, keyText, parseSignable, type Payment, signableId, signableLine, signableText, signableTime, signedBy } from "./countersign.ts";
+import { type ActiveAllowance, agentKey, allowanceFor, allowanceUse } from "./allowances.ts";
+import { type Allowance, amountText, expired, keyText, MAX_ALLOWANCE_DAYS, parseSignable, type Payment, type Period, signableId, signableLine, signableText, signableTime, signedBy } from "./countersign.ts";
+import { cents, decimal } from "./paypal.ts";
 import type { FactCheck, FactChecker } from "./factcheck.ts";
 import type { AgentStep, Guard } from "./guard.ts";
 import { alreadySays, type Learner } from "./memory/learn.ts";
@@ -172,9 +174,11 @@ export class Engine {
    * carries on in the background. Throws straight away if it isn't taken.
    */
   sign(signId: string, signature: string, key: string): string {
-    if (this.store.signRequest(signId)?.kind === "link") {
-      this.linkable(signId, signature, key);
-      void this.signLink(signId, signature, key).catch((error: unknown) => console.error(`[huddle] signature for ${signId}:`, error));
+    const kind = this.store.signRequest(signId)?.kind;
+    if (kind === "link" || kind === "allow") {
+      this.linkable(signId, signature, key, kind);
+      const done = kind === "link" ? this.signLink(signId, signature, key) : this.signAllowance(signId, signature, key);
+      void done.catch((error: unknown) => console.error(`[huddle] signature for ${signId}:`, error));
       return "";
     }
     const request = this.signable(signId, signature, key);
@@ -287,19 +291,97 @@ export class Engine {
     return this.store.signRequest(signId)!;
   }
 
-  /** The waiting link a signature is for, once it's checked: the board it's for, of exactly its text, in time. */
-  private linkable(signId: string, signature: string, key: string): { request: SignRequest; board: Signer; held: LinkResult } {
+  /**
+   * The waiting link (or allowance) a signature is for, once it's checked: the board it's for, of exactly its
+   * text, in time.
+   */
+  private linkable(signId: string, signature: string, key: string, kind: "link" | "allow" = "link"): { request: SignRequest; board: Signer; held: LinkResult } {
+    const what = kind === "link" ? "link" : "allowance";
     const request = this.store.signRequest(signId);
-    if (!request || request.kind !== "link") throw new Error(`There's no link ${signId} waiting to be signed.`);
-    if (request.status !== "waiting") throw new Error(`That link was already ${request.status}.`);
+    if (!request || request.kind !== kind) throw new Error(`There's no ${what} ${signId} waiting to be signed.`);
+    if (request.status !== "waiting") throw new Error(`That ${what} was already ${request.status}.`);
     const board = this.signedBy(request, signature, key);
     const held = linkResult(request);
-    if (held.key !== board.key) throw new Error(`That link is for another of your boards, not ${board.name}.`);
+    if (held.key !== board.key) throw new Error(`That ${what} is for another of your boards, not ${board.name}.`);
     if (expired(parseSignable(request.text), this.now())) {
       this.store.moveSignRequest(signId, "waiting", { status: "expired" });
-      throw new Error("That link expired before your board signed it; start linking again.");
+      throw new Error(`That ${what} expired before your board signed it; start again.`);
     }
     return { request, board, held };
+  }
+
+  // Allowances: your board says once that Huddle may pay at a shop on its own, within limits ---------------
+
+  /**
+   * Starts an allowance at a shop for one of your boards: the text it signs, with the limits and Huddle's own key.
+   * It waits for that board like a payment; once signed, the shop is given it, and from then on Huddle pays for
+   * carts there that fit it without asking the board.
+   */
+  async startAllowance(shopUrl: string, key: string, limits: { readonly for: string; readonly each: string; readonly total: string; readonly per: Period; readonly days: number }): Promise<SignRequest> {
+    let board;
+    try {
+      board = this.store.signer(keyText(key));
+    } catch {
+      board = null;
+    }
+    if (!board) throw new Error("That key isn't one of your boards'. Add the board in Devices first.");
+    const each = cents(limits.each);
+    const total = cents(limits.total);
+    if (each === null || each === 0 || total === null || total === 0) throw new Error("Give the limits as amounts, like 20.00 a time and 50.00 in all.");
+    if (!Number.isInteger(limits.days) || limits.days < 1 || limits.days > MAX_ALLOWANCE_DAYS) throw new Error(`An allowance lasts from 1 to ${MAX_ALLOWANCE_DAYS} days.`);
+    const shop = this.shops(shopUrl);
+    const about = await shop.about();
+    const allowance: Allowance = {
+      v: 1,
+      kind: "allow",
+      id: signableId("allow"),
+      shop: about.shop,
+      for: limits.for.trim().slice(0, 40),
+      agent: agentKey(this.store).key,
+      each: decimal(each),
+      total: decimal(total),
+      per: limits.per,
+      currency: about.currency,
+      expires: signableTime(this.now() + limits.days * 86_400_000),
+    };
+    const text = signableText(allowance);
+    parseSignable(text);
+    return this.store.addSignRequest({ id: allowance.id, kind: "allow", text, runId: null, stepId: null, shop: shop.url, expires: allowance.expires, result: { key: board.key } });
+  }
+
+  /** Takes your board's signature of an allowance and gives it to the shop; it's active once the shop takes it. */
+  async signAllowance(signId: string, signature: string, key: string): Promise<SignRequest> {
+    const { request, board, held } = this.linkable(signId, signature, key, "allow");
+    if (!this.store.markSigned(signId, signature, board.key)) throw new Error("That allowance was already signed or answered.");
+    try {
+      const taken = await this.shops(request.shop).allowance({ text: request.text, signature, key: board.key });
+      this.store.moveSignRequest(signId, "signed", { status: "active", result: { ...held, shop: taken } });
+    } catch (error) {
+      this.store.moveSignRequest(signId, "signed", { status: "failed", error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+    return this.store.signRequest(signId)!;
+  }
+
+  /**
+   * Stops an allowance: Huddle pays nothing more under it from now, and tells the shop, signed with its own key, so
+   * the shop refuses it too. Stopped here even when the shop can't be reached; that's said, to try again.
+   */
+  async stopAllowance(signId: string): Promise<SignRequest> {
+    const request = this.store.signRequest(signId);
+    if (!request || request.kind !== "allow") throw new Error(`There's no allowance ${signId}.`);
+    if (request.status === "waiting") {
+      this.store.moveSignRequest(signId, "waiting", { status: "declined" });
+      return this.store.signRequest(signId)!;
+    }
+    if (request.status !== "active" && request.status !== "stopped") throw new Error(`That allowance is ${request.status}, so there's nothing to stop.`);
+    this.store.moveSignRequest(signId, "active", { status: "stopped" });
+    try {
+      await this.shops(request.shop).stopAllowance(signId, agentKey(this.store).sign(`stop ${signId}`));
+    } catch (error) {
+      throw new Error(`Huddle won't pay under it any more, but the shop didn't hear so: ${error instanceof Error ? error.message : String(error)} Stop it again to tell the shop.`);
+    }
+    return this.store.signRequest(signId)!;
   }
 
   /**
@@ -560,11 +642,38 @@ export class Engine {
     } catch (error) {
       throw new Error(`${cart.shop.name}'s cart can't be signed: ${error instanceof Error ? error.message : String(error)}`);
     }
+    // A cart that fits one of your allowances at this shop: Huddle signs it with its own key and pays now. The shop
+    // holds it to the same limits; when the shop says no (stopped, or over them), your board is asked as ever.
+    const fits = allowanceFor(this.store, shop.url, payment.total, payment.currency, this.now());
+    if (fits) {
+      const paid = await this.payUnder(run, step.id, shop, fits, payment, context);
+      if (paid) return { wait: false, context: paid, next };
+    }
     this.store.addSignRequest({ id: payment.id, kind: "buy", text, runId: run.id, stepId: step.id, shop: shop.url, expires: payment.expires });
     const message = signableLine(payment);
     const approval = this.store.addApproval(run.id, step.id, message, null, null, payment.id);
     this.store.log(run.id, step.id, "waiting", { approval: approval.id, message, sign: payment.id, shop: payment.shop, cart: cart.id, total: payment.total, currency: payment.currency, lines: payment.items.length, expires: payment.expires });
     return { wait: true };
+  }
+
+  /**
+   * Pays for a cart under an allowance: the payment names it and Huddle's key signs it. Null when the shop won't
+   * take it under that allowance (stopped there, or over its limits), so your board is asked instead.
+   */
+  private async payUnder(run: Run, stepId: string, shop: ShopClient, fits: ActiveAllowance, payment: Payment, context: RunContext): Promise<RunContext | null> {
+    const under: Payment = { ...payment, id: signableId("pay"), allow: fits.allowance.id };
+    const text = signableText(under);
+    const agent = agentKey(this.store);
+    this.store.addSignRequest({ id: under.id, kind: "buy", text, runId: run.id, stepId, shop: shop.url, expires: under.expires });
+    this.store.markSigned(under.id, agent.sign(text), agent.key);
+    this.store.log(run.id, stepId, "allowed", { sign: under.id, allowance: fits.allowance.id, for: fits.allowance.for, total: under.total, currency: under.currency, used: allowanceUse(fits), message: signableLine(under) });
+    try {
+      return await this.checkout(run, stepId, shop, this.store.signRequest(under.id)!, context);
+    } catch (error) {
+      if (!(error instanceof ShopError) || error.status !== 403) throw error;
+      this.store.log(run.id, stepId, "over allowance", { sign: under.id, allowance: fits.allowance.id, why: error.message });
+      return null;
+    }
   }
 
   /** Sends the shop a payment your board signed, and keeps what the shop answers. */
@@ -716,8 +825,8 @@ function paidContext(context: RunContext, stepId: string, request: SignRequest):
   const text =
     order.status === "pending"
       ? `PayPal is reviewing the ${amount} payment to ${payment.shop.name} (order ${order.paypal.orderId ?? order.id}); it isn't taken yet.`
-      : `Paid ${amount} to ${payment.shop.name} with PayPal (order ${order.paypal.orderId ?? order.id}).`;
-  const data = { paid: true, status: order.status, shop: payment.shop, total: payment.total, currency: payment.currency, items: payment.items, payment: payment.id, order: order.id, paypal: order.paypal };
+      : `Paid ${amount} to ${payment.shop.name} with PayPal${payment.allow ? ", under your allowance" : ""} (order ${order.paypal.orderId ?? order.id}).`;
+  const data = { paid: true, status: order.status, ...(payment.allow ? { allowance: payment.allow } : {}), shop: payment.shop, total: payment.total, currency: payment.currency, items: payment.items, payment: payment.id, order: order.id, paypal: order.paypal };
   return { ...context, steps: { ...context.steps, [stepId]: { text, data } } };
 }
 

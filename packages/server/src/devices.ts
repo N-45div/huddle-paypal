@@ -27,7 +27,7 @@ export type Screen =
   | {
       readonly type: "sign";
       readonly id: string;
-      readonly kind: "buy" | "link";
+      readonly kind: "buy" | "link" | "allow";
       readonly flow: string;
       readonly text: string;
       readonly line: string;

@@ -83,6 +83,12 @@ function shopClient(refuse = false): ShopClient {
     signedLink: async () => ({ approveUrl: "" }),
     link: async () => ({ id: "", status: "", paypal: null, error: null }),
     board: async () => ({ linked: true, paypal: null }),
+    allowance: async () => {
+      throw new Error("no allowances here");
+    },
+    stopAllowance: async () => {
+      throw new Error("no allowances here");
+    },
   };
 }
 

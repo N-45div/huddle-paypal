@@ -34,6 +34,12 @@ const shop: ShopClient = {
   signedLink: async () => ({ approveUrl: "" }),
   link: async () => ({ id: "", status: "", paypal: null, error: null }),
   board: async () => ({ linked: true, paypal: null }),
+  allowance: async () => {
+    throw new Error("no allowances here");
+  },
+  stopAllowance: async () => {
+    throw new Error("no allowances here");
+  },
 };
 const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
 const jwk = publicKey.export({ format: "jwk" });

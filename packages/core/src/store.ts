@@ -154,12 +154,15 @@ export interface Signer {
  * PayPal at a shop. `text` is exactly what the board is shown and signs.
  */
 export interface SignRequest {
-  /** The signable's own one-time id (pay_…, link_…). */
+  /** The signable's own one-time id (pay_…, link_…, allow_…). */
   readonly id: string;
-  readonly kind: "buy" | "link";
+  readonly kind: "buy" | "link" | "allow";
   readonly text: string;
-  /** waiting for the board; signed; then paid (a payment) or linked (a link); or declined, expired or failed. */
-  readonly status: "waiting" | "signed" | "paid" | "linked" | "declined" | "expired" | "failed";
+  /**
+   * waiting for the board; signed; then paid (a payment), linked (a link) or active (an allowance the shop took,
+   * until it's stopped); or declined, expired or failed.
+   */
+  readonly status: "waiting" | "signed" | "paid" | "linked" | "active" | "stopped" | "declined" | "expired" | "failed";
   readonly runId: string | null;
   readonly stepId: string | null;
   /** The shop's address. */

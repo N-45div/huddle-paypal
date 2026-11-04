@@ -95,4 +95,5 @@ export {
   signableTime,
   signedBy,
 } from "./countersign.ts";
-export { type CartLine, cartLines, type PricedCart, type ShopClient, shopClient, ShopError, type ShopOrder, type ShopProduct } from "./shop.ts";
+export { type CartLine, cartLines, type PricedCart, type ShopAllowanceView, type ShopClient, shopClient, ShopError, type ShopOrder, type ShopProduct } from "./shop.ts";
+export { type ActiveAllowance, activeAllowances, type AgentKey, agentKey, allowanceFor, allowanceUse, spentUnder } from "./allowances.ts";

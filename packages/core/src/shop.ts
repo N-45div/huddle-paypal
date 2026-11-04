@@ -68,6 +68,24 @@ export interface ShopClient {
   link(id: string): Promise<{ readonly id: string; readonly status: string; readonly paypal: string | null; readonly error: string | null }>;
   /** Whether a board is linked to a PayPal at the shop. */
   board(key: string): Promise<{ readonly linked: boolean; readonly paypal: string | null }>;
+  /** Gives the shop an allowance a linked board signed: from then on, the key it names pays within its limits. */
+  allowance(signed: { readonly text: string; readonly signature: string; readonly key: string }): Promise<ShopAllowanceView>;
+  /** Stops an allowance at the shop, with the signature of "stop" and its id by the key it names (or the board). */
+  stopAllowance(id: string, signature: string): Promise<ShopAllowanceView>;
+}
+
+/** An allowance as the shop holds it: its limits, and what was spent under it in the last day, week or month. */
+export interface ShopAllowanceView {
+  readonly id: string;
+  readonly status: "active" | "stopped";
+  readonly each: string;
+  readonly total: string;
+  readonly per: "day" | "week" | "month";
+  readonly currency: string;
+  readonly expires: string;
+  readonly spent: string;
+  readonly board: string;
+  readonly agent: string;
 }
 
 /** One line to have priced: what, and how many. */
@@ -114,6 +132,8 @@ export function shopClient(url: string, fetcher: typeof fetch = globalThis.fetch
     signedLink: (id, signature, returnUrl) => call("take the board's signature of the link", "POST", `/links/${encodeURIComponent(id)}/signed`, { signature, ...(returnUrl ? { returnUrl } : {}) }),
     link: async (id) => (await call<{ link: { id: string; status: string; paypal: string | null; error: string | null } }>("say how the link went", "GET", `/links/${encodeURIComponent(id)}`)).link,
     board: (key) => call("say whether the board is linked", "POST", "/boards", { key }),
+    allowance: async (signed) => (await call<{ allowance: ShopAllowanceView }>("take the allowance", "POST", "/allowances", signed)).allowance,
+    stopAllowance: async (id, signature) => (await call<{ allowance: ShopAllowanceView }>("stop the allowance", "POST", `/allowances/${encodeURIComponent(id)}/stop`, { signature })).allowance,
   };
 }
 

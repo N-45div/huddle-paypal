@@ -64,6 +64,12 @@ function fakeShop(options: { readonly checkout?: (signed: { text: string; signat
       throw new Error("not used");
     },
     board: async () => ({ linked: true, paypal: "buyer@personal.example.com" }),
+    allowance: async () => {
+      throw new Error("no allowances here");
+    },
+    stopAllowance: async () => {
+      throw new Error("no allowances here");
+    },
   };
   return { client, priced, checkouts };
 }

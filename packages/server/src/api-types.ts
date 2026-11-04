@@ -122,8 +122,8 @@ export type { Bought as BoughtView } from "./shops.ts";
 /** Something your board signed, or is asked to: a payment or a link to a shop, and what came of it. */
 export interface SignView {
   readonly id: string;
-  readonly kind: "buy" | "link";
-  readonly status: "waiting" | "signed" | "paid" | "linked" | "declined" | "expired" | "failed";
+  readonly kind: "buy" | "link" | "allow";
+  readonly status: "waiting" | "signed" | "paid" | "linked" | "active" | "stopped" | "declined" | "expired" | "failed";
   /** Exactly what the board is shown and signs. */
   readonly text: string;
   readonly runId: string | null;

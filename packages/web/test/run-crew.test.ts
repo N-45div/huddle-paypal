@@ -182,6 +182,12 @@ describe("a payment on a run", () => {
       signedLink: async () => ({ approveUrl: "" }),
       link: async () => ({ id: "", status: "", paypal: null, error: null }),
       board: async () => ({ linked: true, paypal: null }),
+      allowance: async () => {
+        throw new Error("no allowances here");
+      },
+      stopAllowance: async () => {
+        throw new Error("no allowances here");
+      },
     };
     const flow = parseFlow({
       name: "A mug",
