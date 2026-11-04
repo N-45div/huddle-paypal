@@ -201,6 +201,7 @@ interface FromDevice {
 /** A payment as a sentence to say: shorter than the line the screen shows. */
 function spokenPayment(signable: Signable): string {
   if (signable.kind === "link") return `Link your PayPal at ${signable.shop.name} to this board`;
+  if (signable.kind === "allow") return `Let Huddle spend up to ${amountText(signable.each, signable.currency)} a time, ${amountText(signable.total, signable.currency)} a ${signable.per}, at ${signable.shop.name}`;
   const count = signable.items.reduce((sum, item) => sum + item.qty, 0);
   return `Pay ${amountText(signable.total, signable.currency)} to ${signable.shop.name}, ${count} ${count === 1 ? "item" : "items"}`;
 }

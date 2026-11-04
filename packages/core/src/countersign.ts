@@ -32,6 +32,11 @@ export interface Payment {
   readonly kind: "buy";
   /** New for every payment; the shop pays for each one only once. */
   readonly id: string;
+  /**
+   * The allowance it's paid under, when there is one: then Huddle signs it, with the key that allowance names,
+   * instead of your board, and the shop checks it fits the allowance's limits.
+   */
+  readonly allow?: string;
   readonly shop: Payee;
   /** The shop's id for the cart it priced. */
   readonly cart: string;
@@ -51,7 +56,36 @@ export interface LinkRequest {
   readonly expires: string;
 }
 
-export type Signable = Payment | LinkRequest;
+/** How long an allowance's limit runs over: a day is any 24 hours, a week any 7 days, a month any 30 days. */
+export const PERIODS = { day: 86_400_000, week: 7 * 86_400_000, month: 30 * 86_400_000 } as const;
+export type Period = keyof typeof PERIODS;
+/** The longest an allowance lasts before your board is asked again. */
+export const MAX_ALLOWANCE_DAYS = 31;
+
+/**
+ * An allowance: your board says once that Huddle may pay at this shop on its own, within these limits, until it
+ * expires. Each payment under it is signed by Huddle's own key (`agent`), not your board, and the shop takes it
+ * only while it fits: at most `each` a time, and at most `total` in any `per`. Anything more comes to your board.
+ */
+export interface Allowance {
+  readonly v: 1;
+  readonly kind: "allow";
+  readonly id: string;
+  readonly shop: Payee;
+  /** What it's for, in a few words ("Groceries"): shown on the board. The limits are what count. */
+  readonly for: string;
+  /** Huddle's own public key (raw P-256, base64url): only its signature counts for payments under this. */
+  readonly agent: string;
+  /** The most one payment may be. */
+  readonly each: string;
+  /** The most all of them may come to in any `per`. */
+  readonly total: string;
+  readonly per: Period;
+  readonly currency: string;
+  readonly expires: string;
+}
+
+export type Signable = Payment | LinkRequest | Allowance;
 
 /** The longest text a board is asked to sign (it fits the board's memory and one USB frame). */
 export const MAX_SIGNABLE = 1_500;
@@ -62,8 +96,8 @@ const SHOP_ID = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[
 const CURRENCY = /^[A-Z]{3}$/;
 const WHEN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
-/** A new one-time id: "pay_…" for a payment, "link_…" for a link. */
-export function signableId(prefix: "pay" | "link"): string {
+/** A new one-time id: "pay_…" for a payment, "link_…" for a link, "allow_…" for an allowance. */
+export function signableId(prefix: "pay" | "link" | "allow"): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
 }
 
@@ -76,10 +110,15 @@ export function signableTime(ms: number): string {
 export function signableText(signable: Signable): string {
   const shop = { id: signable.shop.id, name: signable.shop.name };
   if (signable.kind === "link") return JSON.stringify({ v: 1, kind: "link", id: signable.id, shop, expires: signable.expires });
+  if (signable.kind === "allow") {
+    const { id, agent, each, total, per, currency, expires } = signable;
+    return JSON.stringify({ v: 1, kind: "allow", id, shop, for: signable.for, agent, each, total, per, currency, expires });
+  }
   return JSON.stringify({
     v: 1,
     kind: "buy",
     id: signable.id,
+    ...(signable.allow ? { allow: signable.allow } : {}),
     shop,
     cart: signable.cart,
     items: signable.items.map((item) => ({ name: item.name, qty: item.qty, price: item.price })),
@@ -120,8 +159,14 @@ export function parseSignable(text: string): Signable {
     throw new Error("The text to sign isn't JSON.");
   }
   const kind = (value as { kind?: unknown } | null)?.kind;
-  if (kind !== "buy" && kind !== "link") throw new Error('The text to sign is neither a payment ("buy") nor a link ("link").');
-  const record = exactKeys(value, kind === "buy" ? ["v", "kind", "id", "shop", "cart", "items", "total", "currency", "expires"] : ["v", "kind", "id", "shop", "expires"], "The text to sign");
+  if (kind !== "buy" && kind !== "link" && kind !== "allow") throw new Error('The text to sign is neither a payment ("buy"), a link ("link") nor an allowance ("allow").');
+  const under = kind === "buy" && typeof value === "object" && value !== null && "allow" in value;
+  const keys = {
+    buy: ["v", "kind", "id", ...(under ? ["allow"] : []), "shop", "cart", "items", "total", "currency", "expires"],
+    link: ["v", "kind", "id", "shop", "expires"],
+    allow: ["v", "kind", "id", "shop", "for", "agent", "each", "total", "per", "currency", "expires"],
+  }[kind];
+  const record = exactKeys(value, keys, "The text to sign");
   if (record.v !== 1) throw new Error("The text to sign is a version Huddle doesn't know.");
   if (typeof record.id !== "string" || !ID.test(record.id)) throw new Error("The text to sign needs a one-time id.");
   const shopRecord = exactKeys(record.shop, ["id", "name"], "The shop");
@@ -131,6 +176,24 @@ export function parseSignable(text: string): Signable {
   let signable: Signable;
   if (kind === "link") {
     signable = { v: 1, kind, id: record.id, shop, expires: record.expires };
+  } else if (kind === "allow") {
+    if (!record.id.startsWith("allow_")) throw new Error("An allowance's id starts with allow_.");
+    if (typeof record.agent !== "string") throw new Error("The allowance needs Huddle's key.");
+    let agent: string;
+    try {
+      agent = keyText(record.agent);
+    } catch {
+      throw new Error("The allowance's key for Huddle isn't a P-256 key.");
+    }
+    if (agent !== record.agent) throw new Error("The allowance's key for Huddle isn't written the one way it can be.");
+    if (typeof record.currency !== "string" || !CURRENCY.test(record.currency)) throw new Error("The allowance's currency should be a three-letter code, like USD.");
+    const each = typeof record.each === "string" ? cents(record.each) : null;
+    const total = typeof record.total === "string" ? cents(record.total) : null;
+    if (each === null || each === 0 || decimal(each) !== record.each) throw new Error("The allowance's most for one payment should be written like 20.00.");
+    if (total === null || total === 0 || decimal(total) !== record.total) throw new Error("The allowance's most in all should be written like 50.00.");
+    if (each > total) throw new Error("One payment can't be allowed more than all of them together.");
+    if (typeof record.per !== "string" || !(record.per in PERIODS)) throw new Error("The allowance's limit runs per day, week or month.");
+    signable = { v: 1, kind, id: record.id, shop, for: plainName(record.for, "What the allowance is for", 40), agent, each: record.each as string, total: record.total as string, per: record.per as Period, currency: record.currency, expires: record.expires };
   } else {
     if (typeof record.cart !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(record.cart)) throw new Error("The payment needs the shop's id for its cart.");
     if (typeof record.currency !== "string" || !CURRENCY.test(record.currency)) throw new Error("The payment's currency should be a three-letter code, like USD.");
@@ -148,7 +211,8 @@ export function parseSignable(text: string): Signable {
     const total = typeof record.total === "string" ? cents(record.total) : null;
     if (total === null || decimal(total) !== record.total) throw new Error("The payment's total should be written like 32.50.");
     if (total !== sum) throw new Error(`The payment's lines come to ${decimal(sum)}, not the ${record.total} it says.`);
-    signable = { v: 1, kind, id: record.id, shop, cart: record.cart, items, total: record.total, currency: record.currency, expires: record.expires };
+    if (under && (typeof record.allow !== "string" || !/^allow_[A-Za-z0-9]{8,40}$/.test(record.allow))) throw new Error("A payment under an allowance names it by its allow_ id.");
+    signable = { v: 1, kind, id: record.id, ...(under ? { allow: record.allow as string } : {}), shop, cart: record.cart, items, total: record.total, currency: record.currency, expires: record.expires };
   }
   if (signableText(signable) !== text) throw new Error("The text to sign isn't written the one way it can be (key order, spacing), so it can't be signed.");
   return signable;
@@ -216,6 +280,7 @@ export function amountText(value: string, currency: string): string {
 /** What a signable asks, in one line: "Pay $32.50 to Bean & Leaf: 2× House blend beans, 1 lb; 1× Paper filters". */
 export function signableLine(signable: Signable): string {
   if (signable.kind === "link") return `Link your PayPal at ${signable.shop.name} to this board`;
+  if (signable.kind === "allow") return `Let Huddle spend up to ${amountText(signable.each, signable.currency)} a time and ${amountText(signable.total, signable.currency)} a ${signable.per} at ${signable.shop.name}, for ${signable.for}, until ${signable.expires.slice(0, 10)}`;
   const items = signable.items.map((item) => `${item.qty}× ${item.name}`).join("; ");
   return `Pay ${amountText(signable.total, signable.currency)} to ${signable.shop.name}: ${items}`;
 }

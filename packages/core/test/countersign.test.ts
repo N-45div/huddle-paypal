@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, webcrypto } from "node:crypto";
 import { describe, it } from "node:test";
 import {
+  type Allowance,
   amountText,
   boardKey,
   expired,
@@ -153,5 +154,38 @@ describe("a board's signature", () => {
     assert.notEqual(fingerprint(board.raw), fingerprint(chipBoard().raw));
     assert.throws(() => boardKey(Buffer.alloc(65, 4).toString("base64url")), /isn't a point on P-256/);
     assert.throws(() => boardKey(Buffer.alloc(33, 2).toString("base64url")), /uncompressed/);
+  });
+});
+
+describe("an allowance", () => {
+  const agent = chipBoard().raw;
+  const allowance: Allowance = { v: 1, kind: "allow", id: "allow_0123456789abcdef01234567", shop: payment.shop, for: "Groceries", agent, each: "20.00", total: "50.00", per: "week", currency: "USD", expires: "2026-12-04T10:00:00Z" };
+
+  it("is written one way, with Huddle's key and the limits your board signs", () => {
+    const text = signableText(allowance);
+    assert.equal(text, `{"v":1,"kind":"allow","id":"allow_0123456789abcdef01234567","shop":{"id":"beanandleaf.example","name":"Bean & Leaf"},"for":"Groceries","agent":"${agent}","each":"20.00","total":"50.00","per":"week","currency":"USD","expires":"2026-12-04T10:00:00Z"}`);
+    assert.deepEqual(parseSignable(text), allowance);
+    assert.ok(text.length < 400, "small enough for the board to show and sign");
+    assert.equal(signableLine(allowance), "Let Huddle spend up to $20.00 a time and $50.00 a week at Bean & Leaf, for Groceries, until 2026-12-04");
+  });
+
+  it("refuses limits that don't make sense, or a key that isn't one", () => {
+    const text = (change: Partial<Record<keyof Allowance, unknown>>) => signableText({ ...allowance, ...change } as Allowance);
+    assert.throws(() => parseSignable(text({ each: "60.00" })), /can't be allowed more than all of them together/);
+    assert.throws(() => parseSignable(text({ each: "0.00" })), /most for one payment/);
+    assert.throws(() => parseSignable(text({ total: "50" })), /written like 50.00/);
+    assert.throws(() => parseSignable(text({ per: "year" })), /per day, week or month/);
+    assert.throws(() => parseSignable(text({ agent: "not-a-key" })), /isn't a P-256 key/);
+    assert.throws(() => parseSignable(text({ id: "pay_0123456789abcdef01234567" })), /starts with allow_/);
+    assert.throws(() => parseSignable(text({ for: "Groceries\u202Eexcept" })), /can't show plainly/);
+  });
+
+  it("is named by each payment made under it, which the board never sees", () => {
+    const under: Payment = { ...payment, allow: allowance.id };
+    const text = signableText(under);
+    assert.match(text, /^\{"v":1,"kind":"buy","id":"pay_0123456789abcdef01234567","allow":"allow_0123456789abcdef01234567","shop":/);
+    assert.deepEqual(parseSignable(text), under);
+    assert.deepEqual(parseSignable(signableText(payment)), payment, "a payment without one is written as before");
+    assert.throws(() => parseSignable(text.replace('"allow":"allow_', '"allow":"pay_')), /names it by its allow_ id/);
   });
 });
