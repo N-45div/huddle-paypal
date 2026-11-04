@@ -4,11 +4,15 @@ import {
   cents,
   decimal,
   expired,
+  fingerprint,
   keyText,
   type LinkRequest,
+  MAX_ALLOWANCE_DAYS,
   MAX_ITEMS,
   parseSignable,
   type Payee,
+  type Payment,
+  PERIODS,
   PayPal,
   PayPalError,
   signableId,
@@ -19,7 +23,7 @@ import {
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { type Catalog, readCatalog, search } from "./catalog.ts";
-import { type Cart, type Link, type Order, ShopStore } from "./store.ts";
+import { type Cart, type Link, type Order, type ShopAllowance, ShopStore } from "./store.ts";
 
 export { type Catalog, parseCatalog, type Product, readCatalog, search } from "./catalog.ts";
 export { ShopStore } from "./store.ts";
@@ -62,7 +66,7 @@ export interface ShopOptions {
 const MAX_CART_CENTS = 1_000_000;
 const LINK_MINUTES = 10;
 
-type Status = 200 | 201 | 202 | 400 | 401 | 402 | 404 | 409 | 410 | 502 | 503;
+type Status = 200 | 201 | 202 | 400 | 401 | 402 | 403 | 404 | 409 | 410 | 502 | 503;
 const fail = (c: Context, status: Status, error: string) => c.json({ error }, status);
 
 async function body(c: Context): Promise<Record<string, unknown>> {
@@ -81,6 +85,7 @@ const orderView = (order: Order) => ({
   currency: order.currency,
   paypal: { orderId: order.paypalOrderId, captureId: order.captureId },
   error: order.error,
+  allowance: order.allowance,
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
 });
@@ -265,6 +270,76 @@ export function shopApp(options: ShopOptions): Hono {
     return c.json({ linked: Boolean(customer), paypal: customer?.email ?? null, since: customer?.linkedAt ?? null });
   });
 
+  // Allowances: a linked board says once that Huddle's key may pay here on its own, within limits ---------
+
+  /** Since when an allowance's limit counts: now, less its day, week or month. */
+  const windowStart = (allowance: ShopAllowance) => new Date(now() - PERIODS[allowance.per]).toISOString();
+  const allowanceView = (allowance: ShopAllowance) => ({
+    id: allowance.id,
+    status: allowance.status,
+    each: allowance.each,
+    total: allowance.total,
+    per: allowance.per,
+    currency: allowance.currency,
+    expires: allowance.expires,
+    spent: decimal(store.spentUnder(allowance.id, windowStart(allowance))),
+    board: fingerprint(allowance.key),
+    agent: fingerprint(allowance.agent),
+  });
+
+  /** Why a payment doesn't fit its allowance, or null when it does. */
+  const overAllowance = (allowance: ShopAllowance, payment: Payment): string | null => {
+    const money = (value: string) => amountText(value, allowance.currency);
+    if (allowance.status !== "active") return "That allowance was stopped.";
+    if (expired(allowance, now())) return "That allowance has ended.";
+    if (payment.currency !== allowance.currency) return `That allowance is in ${allowance.currency}.`;
+    const total = cents(payment.total) ?? 0;
+    if (total > (cents(allowance.each) ?? 0)) return `${money(payment.total)} is more than the ${money(allowance.each)} a time the allowance lets Huddle pay.`;
+    const spent = store.spentUnder(allowance.id, windowStart(allowance));
+    if (spent + total > (cents(allowance.total) ?? 0)) return `That would make ${money(decimal(spent + total))} in a ${allowance.per} under the allowance, more than its ${money(allowance.total)}.`;
+    return null;
+  };
+
+  /** Takes an allowance a linked board signed: the key it names may then pay for carts here, within its limits. */
+  app.post("/allowances", async (c) => {
+    const { text, signature, key: given } = await body(c);
+    if (typeof text !== "string" || typeof signature !== "string" || typeof given !== "string") return fail(c, 400, "Send the signed allowance as { text, signature, key }.");
+    let key: string;
+    let allowance;
+    try {
+      key = keyText(given);
+      allowance = parseSignable(text);
+    } catch (error) {
+      return fail(c, 400, error instanceof Error ? error.message : String(error));
+    }
+    if (allowance.kind !== "allow") return fail(c, 400, "That's not an allowance.");
+    if (allowance.shop.id !== shop.id || allowance.shop.name !== shop.name) return fail(c, 400, `That allowance is for ${allowance.shop.name} (${allowance.shop.id}), not this shop.`);
+    if (allowance.currency !== catalog.currency) return fail(c, 400, `${shop.name} sells in ${catalog.currency}, not ${allowance.currency}.`);
+    if (!store.customer(key)) return fail(c, 401, `This board isn't linked to a PayPal at ${shop.name}. Link it first.`);
+    if (!signedBy(text, signature, key)) return fail(c, 401, "That isn't this board's signature of the allowance.");
+    if (expired(allowance, now())) return fail(c, 410, "This allowance has already ended.");
+    if (Date.parse(allowance.expires) > now() + (MAX_ALLOWANCE_DAYS + 1) * 86_400_000) return fail(c, 400, `An allowance lasts at most ${MAX_ALLOWANCE_DAYS} days; then the board is asked again.`);
+    const kept = store.addAllowance({ id: allowance.id, key, agent: allowance.agent, text, signature, each: allowance.each, total: allowance.total, per: allowance.per, currency: allowance.currency, expires: allowance.expires });
+    if (kept.text !== text) return fail(c, 409, "Another allowance already has that id.");
+    return c.json({ allowance: allowanceView(kept) }, 201);
+  });
+
+  app.get("/allowances/:id", (c) => {
+    const allowance = store.allowance(c.req.param("id"));
+    return allowance ? c.json({ allowance: allowanceView(allowance) }) : fail(c, 404, "There's no such allowance.");
+  });
+
+  /** Stops an allowance at once: signed ("stop" and its id) by the board that gave it, or by the key it names. */
+  app.post("/allowances/:id/stop", async (c) => {
+    const allowance = store.allowance(c.req.param("id"));
+    if (!allowance) return fail(c, 404, "There's no such allowance.");
+    const signature = String((await body(c)).signature ?? "");
+    const said = `stop ${allowance.id}`;
+    if (!signedBy(said, signature, allowance.key) && !signedBy(said, signature, allowance.agent)) return fail(c, 401, "Stopping an allowance takes a signature from the board that gave it, or from the key it names.");
+    store.stopAllowance(allowance.id);
+    return c.json({ allowance: allowanceView(store.allowance(allowance.id)!) });
+  });
+
   /**
    * Pays for a cart with a board's signature. Charged only when: the text is a payment to this shop, written the
    * one way; the board's key is linked to a PayPal here; the signature is that key's, of exactly that text; it
@@ -288,9 +363,13 @@ export function shopApp(options: ShopOptions): Hono {
     }
     if (payment.kind !== "buy") return fail(c, 400, "That's not a payment.");
     if (payment.shop.id !== shop.id || payment.shop.name !== shop.name) return fail(c, 400, `That payment is to ${payment.shop.name} (${payment.shop.id}), not this shop.`);
-    const customer = store.customer(key);
+    // Under an allowance: signed by the Huddle key it names, and charged to the PayPal of the board that signed it.
+    const allowance = payment.allow ? store.allowance(payment.allow) : null;
+    if (payment.allow && !allowance) return fail(c, 403, "There's no such allowance here, so nothing was charged.");
+    if (allowance && key !== allowance.agent) return fail(c, 401, "Only the key the allowance names can pay under it, so nothing was charged.");
+    const customer = store.customer(allowance ? allowance.key : key);
     if (!customer) return fail(c, 401, `This board isn't linked to a PayPal at ${shop.name}. Link it first.`);
-    if (!signedBy(text, signature, key)) return fail(c, 401, "That isn't this board's signature of this payment, so nothing was charged.");
+    if (!signedBy(text, signature, key)) return fail(c, 401, allowance ? "That isn't the allowance's key's signature of this payment, so nothing was charged." : "That isn't this board's signature of this payment, so nothing was charged.");
 
     const earlier = store.orderForPayment(payment.id);
     if (earlier) {
@@ -309,8 +388,11 @@ export function shopApp(options: ShopOptions): Hono {
       cart.items.length === payment.items.length &&
       cart.items.every((line, index) => line.name === payment.items[index]!.name && line.qty === payment.items[index]!.qty && line.price === payment.items[index]!.price);
     if (!same) return fail(c, 409, "The signed payment isn't this cart as the shop priced it, so nothing was charged.");
+    // Checked and kept together, with nothing in between, so two payments at once can't both slip under the limit.
+    const over = allowance ? overAllowance(allowance, payment) : null;
+    if (over) return fail(c, 403, `${over} Nothing was charged: your board can sign it instead.`);
     if (!paypal) return noPayPal(c);
-    const order = store.startOrder({ paymentId: payment.id, cartId: cart.id, fingerprint: customer.fingerprint, text, signature, total: payment.total, currency: payment.currency });
+    const order = store.startOrder({ paymentId: payment.id, cartId: cart.id, fingerprint: customer.fingerprint, text, signature, total: payment.total, currency: payment.currency, ...(allowance ? { allowance: allowance.id } : {}) });
     // Another checkout of this payment got there first.
     if (!order) return c.json({ order: orderView(store.orderForPayment(payment.id)!) }, 202);
     return charge(c, order, customer.vaultId);
@@ -325,7 +407,7 @@ export function shopApp(options: ShopOptions): Hono {
         currency: cart.currency,
         invoiceId: order.paymentId,
         customId: cart.id,
-        description: `${shop.name}, signed by board ${order.fingerprint}`,
+        description: order.allowance ? `${shop.name}, under allowance ${order.allowance} from board ${order.fingerprint}` : `${shop.name}, signed by board ${order.fingerprint}`,
         items: cart.items.map((line) => ({ name: line.name, sku: line.sku, quantity: line.qty, unitAmount: line.price })),
       });
       const done = store.finishOrder(order.id, { status: result.status === "PENDING" ? "pending" : "paid", paypalOrderId: result.orderId, captureId: result.captureId, error: null });

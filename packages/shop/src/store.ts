@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { fingerprint, type PaymentItem } from "@huddle/core";
+import { cents, fingerprint, type PaymentItem } from "@huddle/core";
 
 /**
  * What the shop keeps, in its own SQLite file (never Huddle's): the carts it priced, the boards linked to a
@@ -55,6 +55,8 @@ export interface Order {
   readonly paypalOrderId: string | null;
   readonly captureId: string | null;
   readonly error: string | null;
+  /** The allowance it was paid under, when Huddle paid on its own; null when the board signed it. */
+  readonly allowance: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -76,7 +78,11 @@ export class ShopStore {
       CREATE TABLE IF NOT EXISTS links (id TEXT PRIMARY KEY, key TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, setup_token TEXT, return_url TEXT, error TEXT, expires TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, payment_id TEXT NOT NULL UNIQUE, cart_id TEXT NOT NULL, fingerprint TEXT NOT NULL, text TEXT NOT NULL, signature TEXT NOT NULL, total TEXT NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL, paypal_order TEXT, capture_id TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS orders_capture ON orders (capture_id);
+      CREATE TABLE IF NOT EXISTS allowances (id TEXT PRIMARY KEY, key TEXT NOT NULL, agent TEXT NOT NULL, text TEXT NOT NULL, signature TEXT NOT NULL, each_most TEXT NOT NULL, total_most TEXT NOT NULL, per TEXT NOT NULL, currency TEXT NOT NULL, expires TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
     `);
+    // Orders made under an allowance say which; a shop's database from before allowances gains the column.
+    const columns = (this.db.prepare("PRAGMA table_info(orders)").all() as Row[]).map((column) => String(column.name));
+    if (!columns.includes("allowance")) this.db.exec("ALTER TABLE orders ADD COLUMN allowance TEXT");
   }
 
   close(): void {
@@ -147,12 +153,12 @@ export class ShopStore {
    * Starts an order for a payment, before PayPal is asked; null if that payment already has one (the
    * payment id is unique, so two checkouts of one signed payment can't both charge).
    */
-  startOrder(order: Pick<Order, "paymentId" | "cartId" | "fingerprint" | "text" | "signature" | "total" | "currency">): Order | null {
+  startOrder(order: Pick<Order, "paymentId" | "cartId" | "fingerprint" | "text" | "signature" | "total" | "currency"> & { readonly allowance?: string }): Order | null {
     const id = newId("order");
     const at = now();
     const result = this.db
-      .prepare("INSERT INTO orders (id, payment_id, cart_id, fingerprint, text, signature, total, currency, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'charging', ?, ?) ON CONFLICT (payment_id) DO NOTHING")
-      .run(id, order.paymentId, order.cartId, order.fingerprint, order.text, order.signature, order.total, order.currency, at, at);
+      .prepare("INSERT INTO orders (id, payment_id, cart_id, fingerprint, text, signature, total, currency, status, created_at, updated_at, allowance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'charging', ?, ?, ?) ON CONFLICT (payment_id) DO NOTHING")
+      .run(id, order.paymentId, order.cartId, order.fingerprint, order.text, order.signature, order.total, order.currency, at, at, order.allowance ?? null);
     return Number(result.changes) === 1 ? this.order(id) : null;
   }
 
@@ -178,9 +184,64 @@ export class ShopStore {
     return row ? toOrder(row) : null;
   }
 
+  /** Keeps an allowance a board signed: a new one is active; the same one again is the one kept. */
+  addAllowance(allowance: Omit<ShopAllowance, "status" | "createdAt">): ShopAllowance {
+    this.db
+      .prepare("INSERT INTO allowances (id, key, agent, text, signature, each_most, total_most, per, currency, expires, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?) ON CONFLICT (id) DO NOTHING")
+      .run(allowance.id, allowance.key, allowance.agent, allowance.text, allowance.signature, allowance.each, allowance.total, allowance.per, allowance.currency, allowance.expires, now());
+    return this.allowance(allowance.id)!;
+  }
+
+  allowance(id: string): ShopAllowance | null {
+    const row = this.db.prepare("SELECT * FROM allowances WHERE id = ?").get(id) as Row | undefined;
+    if (!row) return null;
+    return {
+      id: String(row.id),
+      key: String(row.key),
+      agent: String(row.agent),
+      text: String(row.text),
+      signature: String(row.signature),
+      each: String(row.each_most),
+      total: String(row.total_most),
+      per: String(row.per) as ShopAllowance["per"],
+      currency: String(row.currency),
+      expires: String(row.expires),
+      status: String(row.status) as ShopAllowance["status"],
+      createdAt: String(row.created_at),
+    };
+  }
+
+  /** Stops an allowance: nothing more is paid under it. False if it was already stopped, or isn't one. */
+  stopAllowance(id: string): boolean {
+    return Number(this.db.prepare("UPDATE allowances SET status = 'stopped' WHERE id = ? AND status = 'active'").run(id).changes) === 1;
+  }
+
+  /** What orders under an allowance came to since a time, in cents: paid, held for review, or still with PayPal. */
+  spentUnder(allowance: string, since: string): number {
+    const rows = this.db.prepare("SELECT total FROM orders WHERE allowance = ? AND status IN ('charging', 'paid', 'pending') AND created_at >= ?").all(allowance, since) as Row[];
+    return rows.reduce((sum, row) => sum + (cents(String(row.total)) ?? 0), 0);
+  }
+
   orders(limit = 100): Order[] {
     return (this.db.prepare("SELECT * FROM orders ORDER BY created_at DESC LIMIT ?").all(limit) as Row[]).map(toOrder);
   }
+}
+
+/** An allowance a board signed here: Huddle's key (`agent`) may pay for carts within its limits, charged to the board's PayPal. */
+export interface ShopAllowance {
+  readonly id: string;
+  /** The board that signed it: its PayPal is the one charged. */
+  readonly key: string;
+  readonly agent: string;
+  readonly text: string;
+  readonly signature: string;
+  readonly each: string;
+  readonly total: string;
+  readonly per: "day" | "week" | "month";
+  readonly currency: string;
+  readonly expires: string;
+  readonly status: "active" | "stopped";
+  readonly createdAt: string;
 }
 
 function toOrder(row: Row): Order {
@@ -197,6 +258,7 @@ function toOrder(row: Row): Order {
     paypalOrderId: text(row.paypal_order),
     captureId: text(row.capture_id),
     error: text(row.error),
+    allowance: text(row.allowance),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
