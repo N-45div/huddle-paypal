@@ -438,12 +438,27 @@ function VirtualButton() {
               {signable ? (
                 <>
                   <p className="gadget-line">
-                    {signable.kind === "link" ? "Link this board at " : "Pay "}
+                    {signable.kind === "link" ? "Link this board at " : signable.kind === "allow" ? "Let Huddle spend at " : "Pay "}
                     {signable.shop.name}
                     {fresh && <span className="gadget-new">NEW</span>}
                   </p>
                   <p className="gadget-meta">{signable.shop.id}</p>
-                  {signable.kind === "buy" ? (
+                  {signable.kind === "allow" ? (
+                    <ul className="gadget-items">
+                      <li>
+                        <span>A time, at most</span>
+                        <span>{money(signable.each, signable.currency)}</span>
+                      </li>
+                      <li className="gadget-total">
+                        <span>In a {signable.per}</span>
+                        <span>{money(signable.total, signable.currency)}</span>
+                      </li>
+                      <li>
+                        <span>For {signable.for}</span>
+                        <span>until {signable.expires.slice(0, 10)}</span>
+                      </li>
+                    </ul>
+                  ) : signable.kind === "buy" ? (
                     <ul className="gadget-items">
                       {signable.items.map((item, index) => (
                         <li key={index}>
@@ -529,7 +544,7 @@ function VirtualButton() {
             {signing ? "Signing…" : "Hold 2 s to sign"}
           </HoldButton>
           <button type="button" className="btn" onClick={() => send({ type: "decline", id: screen.id })}>
-            {signable?.kind === "link" ? "Don't link" : "Don't pay"} <span className="muted">(tap)</span>
+            {signable?.kind === "link" ? "Don't link" : signable?.kind === "allow" ? "Don't allow" : "Don't pay"} <span className="muted">(tap)</span>
           </button>
         </div>
       )}

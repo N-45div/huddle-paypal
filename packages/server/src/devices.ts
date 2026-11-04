@@ -245,13 +245,13 @@ export class DeviceHub {
     const payment = signing[0];
     if (payment) {
       const run = payment.runId ? this.store.run(payment.runId) : null;
-      let line = payment.kind === "link" ? "Link this board at a shop" : "A payment to sign";
+      let line = payment.kind === "link" ? "Link this board at a shop" : payment.kind === "allow" ? "An allowance to sign" : "A payment to sign";
       try {
         line = signableLine(parseSignable(payment.text));
       } catch {
         // Not readable: the board refuses to sign what it can't read, and says so.
       }
-      return { type: "sign", id: payment.id, kind: payment.kind, flow: run?.flow.name ?? (payment.kind === "link" ? "Link a shop" : "A payment"), text: payment.text, line, expires: payment.expires, more: signing.length - 1 + waiting.length };
+      return { type: "sign", id: payment.id, kind: payment.kind, flow: run?.flow.name ?? (payment.kind === "link" ? "Link a shop" : payment.kind === "allow" ? "An allowance" : "A payment"), text: payment.text, line, expires: payment.expires, more: signing.length - 1 + waiting.length };
     }
     const first = waiting[0];
     if (first) {

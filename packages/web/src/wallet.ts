@@ -29,13 +29,15 @@ export interface WalletPayment {
   readonly currency: string;
   readonly status: SignView["status"];
   readonly order: PaidOrder | null;
+  /** The allowance it was paid under, when Huddle paid it on its own; null when a board signed it. */
+  readonly allow: string | null;
   readonly sign: SignView;
 }
 
 /** A payment from what a board was asked to sign; null when its text isn't one. */
 export function paymentOf(sign: SignView): WalletPayment | null {
   if (sign.kind !== "buy") return null;
-  let value: { shop?: { id?: unknown; name?: unknown }; items?: unknown; total?: unknown; currency?: unknown };
+  let value: { shop?: { id?: unknown; name?: unknown }; items?: unknown; total?: unknown; currency?: unknown; allow?: unknown };
   try {
     value = JSON.parse(sign.text) as typeof value;
   } catch {
@@ -44,7 +46,7 @@ export function paymentOf(sign: SignView): WalletPayment | null {
   if (typeof value.shop?.id !== "string" || typeof value.shop.name !== "string" || !Array.isArray(value.items) || typeof value.total !== "string" || typeof value.currency !== "string") return null;
   const result = sign.result as Partial<PaidOrder> | null;
   const order = result && typeof result.id === "string" && typeof result.status === "string" ? (result as PaidOrder) : null;
-  return { id: sign.id, shop: { id: value.shop.id, name: value.shop.name }, items: value.items as PaymentLine[], total: value.total, currency: value.currency, status: sign.status, order, sign };
+  return { id: sign.id, shop: { id: value.shop.id, name: value.shop.name }, items: value.items as PaymentLine[], total: value.total, currency: value.currency, status: sign.status, order, allow: typeof value.allow === "string" ? value.allow : null, sign };
 }
 
 /** "12.50" as 1250; null when it isn't an amount. */

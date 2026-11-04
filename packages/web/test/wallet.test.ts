@@ -79,6 +79,13 @@ describe("the wallet's words", () => {
     assert.equal(paymentOf({ ...payment("pay_1", "1.00", "paid", "2026-11-03T09:00:00Z"), text: "not json" }), null);
   });
 
+  it("knows a payment Huddle made under an allowance from one a board signed", () => {
+    const sign = payment("pay_1", "14.00", "paid", "2026-11-04T09:00:00Z");
+    const under = { ...sign, text: sign.text.replace('"id":"pay_1",', '"id":"pay_1","allow":"allow_000000000001",') };
+    assert.equal(paymentOf(under)?.allow, "allow_000000000001");
+    assert.equal(paymentOf(sign)?.allow, null);
+  });
+
   it("lists each board's shops from the links that went through", () => {
     const link = (key: string, status: SignView["status"], paypal: string | null): SignView => ({
       ...payment("link_1", "0", "waiting", "2026-11-03T09:00:00Z", null),

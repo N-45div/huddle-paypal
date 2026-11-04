@@ -6,6 +6,7 @@ import { useChanges } from "../events.ts";
 import { ago, fullTime } from "../format.ts";
 import { useResource } from "../hooks.ts";
 import { href } from "../router.ts";
+import { AllowancesCard } from "./AllowancesCard.tsx";
 import { cents, itemsLine, linkedShops, money, paymentOf, paymentState, spentSince, startOfMonth, startOfWeek, type WalletPayment } from "../wallet.ts";
 
 type Filter = "all" | "paid" | "open" | "not";
@@ -124,6 +125,8 @@ export function WalletScreen() {
         )}
       </section>
 
+      <AllowancesCard />
+
       <section aria-labelledby="wallet-payments">
         <div className="wallet-payments-head">
           <h2 id="wallet-payments" className="section-title">
@@ -196,7 +199,7 @@ function PaymentRow({ payment }: { readonly payment: WalletPayment }) {
               {payment.shop.name} <span className="hint">{payment.shop.id}</span>
             </dd>
             <dt>Signed by</dt>
-            <dd>{payment.sign.board ? <code>{payment.sign.board}</code> : "No board yet"}</dd>
+            <dd>{payment.allow ? <>Huddle, under your allowance (your board signed that once)</> : payment.sign.board ? <code>{payment.sign.board}</code> : "No board yet"}</dd>
             {payment.order?.paypal.orderId && (
               <>
                 <dt>PayPal order</dt>
@@ -236,11 +239,11 @@ function PaymentRow({ payment }: { readonly payment: WalletPayment }) {
               </>
             )}
           </dl>
-          <p className="wallet-signed-label">Exactly what the board signed</p>
+          <p className="wallet-signed-label">{payment.allow ? "Exactly what Huddle signed, under your allowance" : "Exactly what the board signed"}</p>
           <pre className="wallet-signed">{payment.sign.text}</pre>
           {payment.sign.signature && (
             <p className="hint wallet-signature">
-              Signature (P-256): <code>{payment.sign.signature}</code>
+              {payment.allow ? "Huddle's signature" : "Signature"} (P-256): <code>{payment.sign.signature}</code>
             </p>
           )}
         </div>

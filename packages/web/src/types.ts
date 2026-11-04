@@ -38,6 +38,7 @@ export type {
   ToolDetails,
   RunView,
   SignIn,
+  AllowanceView,
   BoughtView,
   FoundView,
   SignerView,

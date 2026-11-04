@@ -4673,3 +4673,26 @@ h1 .badge {
 .wallet-signature code {
   overflow-wrap: anywhere;
 }
+
+/* Allowances: the limits, and what's gone out under one this period. */
+.allowance-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.allowance-bar {
+  height: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border-radius: 999px;
+}
+
+.allowance-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}

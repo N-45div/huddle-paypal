@@ -19,12 +19,27 @@ interface Linking {
   readonly expires: string;
 }
 
+/** An allowance: Huddle may pay at this shop on its own, up to `each` a time and `total` a `per`, until it expires. */
+interface Allowing {
+  readonly shop: { readonly id: string; readonly name: string };
+  readonly for: string;
+  readonly each: string;
+  readonly total: string;
+  readonly per: string;
+  readonly currency: string;
+  readonly expires: string;
+}
+
 /** What a text a board signs says: a payment ({"kind":"buy", ...}) or linking at a shop ({"kind":"link", ...}); null for anything else. */
-export function signableIn(text: string): ({ readonly kind: "buy" } & Shown) | ({ readonly kind: "link" } & Linking) | null {
+export function signableIn(text: string): ({ readonly kind: "buy" } & Shown) | ({ readonly kind: "link" } & Linking) | ({ readonly kind: "allow" } & Allowing) | null {
   try {
-    const value = JSON.parse(text) as Partial<Shown> & { readonly kind?: unknown };
+    const value = JSON.parse(text) as Partial<Shown> & Partial<Allowing> & { readonly kind?: unknown };
     if (!value.shop || typeof value.shop.name !== "string" || typeof value.shop.id !== "string" || typeof value.expires !== "string") return null;
     if (value.kind === "link") return { kind: "link", shop: value.shop, expires: value.expires };
+    if (value.kind === "allow") {
+      if (typeof value.for !== "string" || typeof value.each !== "string" || typeof value.total !== "string" || typeof value.per !== "string" || typeof value.currency !== "string") return null;
+      return { kind: "allow", shop: value.shop, for: value.for, each: value.each, total: value.total, per: value.per, currency: value.currency, expires: value.expires };
+    }
     if (value.kind !== "buy" || !Array.isArray(value.items) || typeof value.total !== "string" || typeof value.currency !== "string") return null;
     return value as { readonly kind: "buy" } & Shown;
   } catch {
