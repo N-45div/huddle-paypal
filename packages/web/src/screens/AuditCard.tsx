@@ -82,7 +82,7 @@ export function AuditCard() {
               ? "No charges at PayPal to check yet."
               : flagged.length === 0
                 ? `All ${findings.length} of PayPal's charges were signed by your board or an allowance.`
-                : `${flagged.length} of ${findings.length} charges at PayPal have no signature of yours behind them.`}
+                : `${flagged.length} of ${findings.length} charges at PayPal ${flagged.length === 1 ? "has" : "have"} no signature of yours behind ${flagged.length === 1 ? "it" : "them"}.`}
           </p>
           <p className="hint">
             {view.data.checkedAt ? (
@@ -124,14 +124,23 @@ export function AuditCard() {
       )}
       {fine.length > 0 && (
         <details className="audit-fine">
-          <summary>{fine.length} signed charges</summary>
+          <summary>
+            {fine.length} more: {fine.some((finding) => finding.verdict === "signed" || finding.verdict === "allowed") ? "signed" : ""}
+            {fine.some((finding) => finding.verdict === "signed" || finding.verdict === "allowed") && fine.some((finding) => finding.verdict !== "signed" && finding.verdict !== "allowed") ? ", or " : ""}
+            {fine.some((finding) => finding.verdict !== "signed" && finding.verdict !== "allowed") ? "refunded" : ""}
+          </summary>
           <ul className="note-list">
             {fine.slice(0, 20).map((finding) => (
               <li key={finding.charge.captureId} className="note-item">
                 <div className="note-text">
                   <p>
-                    {amount(finding)} <span className="badge tone-ok">{finding.verdict === "allowed" ? "Allowance" : "Signed"}</span>
-                    {finding.charge.status !== "COMPLETED" && <span className="badge">{finding.charge.status.toLowerCase()}</span>}
+                    {amount(finding)}{" "}
+                    {finding.verdict === "signed" || finding.verdict === "allowed" ? (
+                      <span className="badge tone-ok">{finding.verdict === "allowed" ? "Allowance" : "Signed"}</span>
+                    ) : (
+                      <span className="badge">No signature, money back</span>
+                    )}
+                    {finding.charge.status !== "COMPLETED" && (finding.verdict === "signed" || finding.verdict === "allowed") && <span className="badge">{finding.charge.status.toLowerCase()}</span>}
                   </p>
                   <p className="note-meta">
                     {finding.why} <code>{finding.charge.captureId}</code>
