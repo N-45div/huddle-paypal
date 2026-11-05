@@ -332,6 +332,79 @@ export class PayPal {
     const answer = (await this.call("check the webhook", "POST", "/v1/notifications/verify-webhook-signature", { ...needed, webhook_id: webhookId, webhook_event: event })) as { verification_status?: unknown } | null;
     return answer?.verification_status === "SUCCESS";
   }
+
+  /** An order as PayPal has it: its status, and each capture's id, status, amount and invoice id. */
+  async order(id: string): Promise<{ readonly id: string; readonly status: string; readonly invoiceId: string | null; readonly captures: readonly { readonly id: string; readonly status: string; readonly amount: Money; readonly at: string }[] }> {
+    const answer = (await this.call("look the order up", "GET", `/v2/checkout/orders/${encodeURIComponent(id)}`)) as {
+      id?: unknown;
+      status?: unknown;
+      purchase_units?: { invoice_id?: unknown; payments?: { captures?: { id?: unknown; status?: unknown; amount?: { currency_code?: unknown; value?: unknown }; create_time?: unknown }[] } }[];
+    } | null;
+    const unit = answer?.purchase_units?.[0];
+    return {
+      id: String(answer?.id ?? id),
+      status: String(answer?.status ?? "UNKNOWN"),
+      invoiceId: typeof unit?.invoice_id === "string" ? unit.invoice_id : null,
+      captures: (unit?.payments?.captures ?? []).flatMap((capture) =>
+        typeof capture.id === "string" ? [{ id: capture.id, status: String(capture.status ?? "UNKNOWN"), amount: { currency_code: String(capture.amount?.currency_code ?? ""), value: String(capture.amount?.value ?? "") }, at: String(capture.create_time ?? "") }] : [],
+      ),
+    };
+  }
+
+  /** The webhooks this PayPal app has: each one's id, address and the events it's sent. */
+  async webhooks(): Promise<{ readonly id: string; readonly url: string; readonly events: readonly string[] }[]> {
+    const answer = (await this.call("list the app's webhooks", "GET", "/v1/notifications/webhooks")) as { webhooks?: { id?: unknown; url?: unknown; event_types?: { name?: unknown }[] }[] } | null;
+    return (answer?.webhooks ?? []).flatMap((hook) =>
+      typeof hook.id === "string" && typeof hook.url === "string" ? [{ id: hook.id, url: hook.url, events: (hook.event_types ?? []).flatMap((type) => (typeof type.name === "string" ? [type.name] : [])) }] : [],
+    );
+  }
+
+  /**
+   * Adds a webhook, or points the app's webhook at `url` when it has one there already: PayPal sends these events
+   * to the address, and keeps them for `events()` whether or not it could deliver them.
+   */
+  async addWebhook(url: string, events: readonly string[]): Promise<{ readonly id: string; readonly url: string }> {
+    if (!/^https:\/\//.test(url)) throw new Error("PayPal sends webhooks only to an https:// address.");
+    const answer = (await this.call("add the webhook", "POST", "/v1/notifications/webhooks", { url, event_types: events.map((name) => ({ name })) })) as { id?: unknown; url?: unknown } | null;
+    if (typeof answer?.id !== "string") throw new Error("PayPal added the webhook but gave no id.");
+    return { id: answer.id, url: String(answer.url ?? url) };
+  }
+
+  /** Moves a webhook to another address. */
+  async moveWebhook(id: string, url: string): Promise<void> {
+    if (!/^https:\/\//.test(url)) throw new Error("PayPal sends webhooks only to an https:// address.");
+    await this.call("move the webhook", "PATCH", `/v1/notifications/webhooks/${encodeURIComponent(id)}`, [{ op: "replace", path: "/url", value: url }]);
+  }
+
+  /**
+   * PayPal's own record of what happened to this app's payments (each capture, refund or reversal), as the events
+   * it made for the app's webhooks since `since`, newest first. It's PayPal's record, not the shop's: a charge made
+   * any other way shows up here too.
+   */
+  async events(options: { readonly since: string; readonly until?: string; readonly type?: string; readonly most?: number }): Promise<PayPalEvent[]> {
+    const most = options.most ?? 300;
+    const query = new URLSearchParams({ page_size: "50", start_time: options.since, end_time: options.until ?? new Date().toISOString(), ...(options.type ? { event_type: options.type } : {}) });
+    let path: string | null = `/v1/notifications/webhooks-events?${query}`;
+    const events: PayPalEvent[] = [];
+    while (path && events.length < most) {
+      const answer = (await this.call("list PayPal's events", "GET", path)) as { events?: unknown[]; links?: { rel?: unknown; href?: unknown }[] } | null;
+      for (const raw of answer?.events ?? []) {
+        const event = raw as { id?: unknown; event_type?: unknown; create_time?: unknown; resource?: unknown };
+        if (typeof event.id === "string" && typeof event.event_type === "string") events.push({ id: event.id, type: event.event_type, at: String(event.create_time ?? ""), resource: (event.resource ?? {}) as Record<string, unknown> });
+      }
+      const next = answer?.links?.find((link) => link.rel === "next")?.href;
+      path = typeof next === "string" && next.startsWith(this.base) && (answer?.events?.length ?? 0) > 0 ? next.slice(this.base.length) : null;
+    }
+    return events.slice(0, most);
+  }
+}
+
+/** One of PayPal's events for the app: what happened (PAYMENT.CAPTURE.COMPLETED, say), when, and to what. */
+export interface PayPalEvent {
+  readonly id: string;
+  readonly type: string;
+  readonly at: string;
+  readonly resource: Readonly<Record<string, unknown>>;
 }
 
 interface OrderBody {
