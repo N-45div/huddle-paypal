@@ -190,6 +190,12 @@ speaker ([the firmware, the parts and how to set it up](firmware/huddle-button/R
   board, which is told of every payment made under one. The shop holds Huddle to the limits itself, so a
   Huddle that's been broken into can spend no more than you allowed, at that shop, until the allowance ends
   (31 days at most) or you stop it.
+- **An auditor.** Every ten minutes Huddle reads PayPal's own record of the shop's charges and checks each one
+  against what was signed: a board of yours, for exactly that amount, or Huddle under an allowance a board
+  signed. A charge with no signature behind it (a shop that's been broken into, charging your saved PayPal
+  directly) is flagged in the Wallet, with a dispute Nemotron drafts from the facts, ready to send PayPal.
+  PayPal's record of every charge comes through a webhook: `npm run paypal:webhook --
+  https://<your Huddle>/shop/paypal/webhook` adds it and prints the id for `PAYPAL_WEBHOOK_ID`.
 - **Wallet.** What your boards paid this week and month, where each board is linked, and every payment with
   PayPal's order and capture ids. Each one keeps the exact text its board signed and the signature, so anyone
   with the board's key can check what it said yes to.
