@@ -383,7 +383,9 @@ export class PayPal {
    */
   async events(options: { readonly since: string; readonly until?: string; readonly type?: string; readonly most?: number }): Promise<PayPalEvent[]> {
     const most = options.most ?? 300;
-    const query = new URLSearchParams({ page_size: "50", start_time: options.since, end_time: options.until ?? new Date().toISOString(), ...(options.type ? { event_type: options.type } : {}) });
+    // PayPal takes these times to the second: with milliseconds it refuses them as not RFC 3339.
+    const second = (iso: string) => new Date(iso).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const query = new URLSearchParams({ page_size: "50", start_time: second(options.since), end_time: second(options.until ?? new Date().toISOString()), ...(options.type ? { event_type: options.type } : {}) });
     let path: string | null = `/v1/notifications/webhooks-events?${query}`;
     const events: PayPalEvent[] = [];
     while (path && events.length < most) {

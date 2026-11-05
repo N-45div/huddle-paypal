@@ -89,9 +89,9 @@ describe("the auditor at PayPal's sandbox", () => {
     const withWebhook = (await paypal!.webhooks()).length > 0;
     const auditor = new Auditor(store, paypal!, { merchant: "Bean & Leaf" });
     let view = await auditor.run();
-    // PayPal makes its events within moments; a few more looks, when there's a webhook to make them for.
-    for (let tries = 0; withWebhook && tries < 12 && !view.findings.some((one) => one.charge.captureId === behind.captureId); tries += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    // PayPal's sandbox lists a capture's event a minute or two after it: a few more looks, when there's a webhook.
+    for (let tries = 0; withWebhook && tries < 24 && !view.findings.some((one) => one.charge.captureId === behind.captureId); tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
       view = await auditor.run();
     }
     const passed = view.findings.find((one) => one.charge.captureId === signedCapture);

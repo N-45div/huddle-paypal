@@ -95,6 +95,15 @@ describe("the auditor", () => {
       ],
     );
     const store = new Store();
-    assert.equal(audit(store, [...charges, charges[1]!]).length, 2, "a charge seen twice counts once");
+    const found = audit(store, [...charges, charges[1]!]);
+    assert.equal(found.length, 2, "a charge seen twice counts once");
+    assert.deepEqual(
+      found.map((one) => [one.charge.captureId, one.verdict, flagged(one)]).sort(),
+      [
+        ["CAP1", "unsigned", false],
+        ["CAP2", "unsigned", true],
+      ],
+      "no signature behind either, but CAP1's money was given back",
+    );
   });
 });

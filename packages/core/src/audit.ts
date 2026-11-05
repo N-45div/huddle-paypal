@@ -121,7 +121,10 @@ export function audit(store: Store, charges: readonly PayPalCharge[]): Finding[]
   return [...seen.values()].sort((a, b) => b.at.localeCompare(a.at)).map((charge) => auditCharge(store, charge));
 }
 
-/** Whether a finding needs you: a charge no board signed, or one for a different amount than was signed. */
+/**
+ * Whether a finding needs you: a charge no board signed, or one for a different amount than was signed, that's
+ * still taken. One refunded or reversed since has given the money back.
+ */
 export function flagged(finding: Finding): boolean {
-  return finding.verdict === "unsigned" || finding.verdict === "mismatch";
+  return (finding.verdict === "unsigned" || finding.verdict === "mismatch") && finding.charge.status !== "REFUNDED" && finding.charge.status !== "REVERSED";
 }
