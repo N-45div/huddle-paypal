@@ -14,6 +14,7 @@ import type { MonidCatalog } from "./monid.ts";
 import { noSandboxes, type SandboxInbox, Stale } from "./sandbox-requests.ts";
 import { knownShops, linesFrom, pickShop, searchShops, startBuy } from "./shops.ts";
 import { type Limits, limitsFrom, type LimitsWriter } from "./allowance-words.ts";
+import type { Auditor, AuditView } from "./auditor.ts";
 import { readTemplates, type Template } from "./templates.ts";
 
 /**
@@ -66,6 +67,8 @@ export interface AppOptions {
   readonly shop?: string;
   /** Writes an allowance's exact limits from what you say, when a model is set up. */
   readonly limits?: LimitsWriter;
+  /** Checks PayPal's record of the shop's charges against what your boards signed, when PayPal is set up. */
+  readonly auditor?: Auditor;
 }
 
 /** A flow from a request body, or the problems with it, one line each. */
@@ -143,6 +146,7 @@ export function createApp(options: AppOptions): Hono {
       justAsk: Boolean(options.asker),
       shop: options.shop ?? null,
       allowanceWords: Boolean(options.limits),
+      auditor: Boolean(options.auditor),
     }),
   );
 
@@ -484,6 +488,18 @@ export function createApp(options: AppOptions): Hono {
       return bad(c, error instanceof Error ? error.message : String(error), 409);
     }
   });
+  // The auditor: each PayPal charge, checked against what your boards (and allowances) signed.
+  const noAuditor = "The auditor reads PayPal's record of the shop's charges: set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET.";
+  app.get("/api/audit", (c) => (options.auditor ? c.json<AuditView>(options.auditor.view()) : bad(c, noAuditor, 501)));
+  app.post("/api/audit", async (c) => {
+    if (!options.auditor) return bad(c, noAuditor, 501);
+    try {
+      return c.json<AuditView>(await options.auditor.run());
+    } catch (error) {
+      return bad(c, error instanceof Error ? error.message : String(error), 502);
+    }
+  });
+
   // Allowances: your board says once that Huddle may pay at a shop on its own, within limits it shows you.
   const allowanceView = (request: SignRequest): AllowanceView => {
     const allowance = parseSignable(request.text) as Allowance;

@@ -5,7 +5,8 @@ import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { demoShop } from "@huddle/shop";
 import { limitsWriter } from "./allowance-words.ts";
-import { Assistants, type Budget, currentModel, isTokenFactory, DEFAULT_MAX_USD, defaultConnectors, dollars, embedder, Engine, factChecker, jevJudge, jevPresenter, type Judge, Memory, Meter, modelJudge, modelPresenter, NEMOTRON, OpenShell, openshell, OWN_CALLS_PER_MINUTE, PactIdentity, pact, parseBudget, RECALL_BUDGET, refreshTokenFactoryPrices, reranker, Router, TOKEN_FACTORY_URL, rulesPresenter, type Guard, guardFromEnv, nemoSpeech, noteTaker, SignIns, Store, storedGrants, tidyMemory, viewWriter } from "@huddle/core";
+import { Auditor, disputeWriter } from "./auditor.ts";
+import { Assistants, type Budget, PayPal, currentModel, isTokenFactory, DEFAULT_MAX_USD, defaultConnectors, dollars, embedder, Engine, factChecker, jevJudge, jevPresenter, type Judge, Memory, Meter, modelJudge, modelPresenter, NEMOTRON, OpenShell, openshell, OWN_CALLS_PER_MINUTE, PactIdentity, pact, parseBudget, RECALL_BUDGET, refreshTokenFactoryPrices, reranker, Router, TOKEN_FACTORY_URL, rulesPresenter, type Guard, guardFromEnv, nemoSpeech, noteTaker, SignIns, Store, storedGrants, tidyMemory, viewWriter } from "@huddle/core";
 import { createApp } from "./app.ts";
 import { describer } from "./describe.ts";
 import { Asker, planner } from "./just-ask.ts";
@@ -202,6 +203,10 @@ const justAsk = llmUrl && fillModel ? planner({ url: llmUrl, model: fillModel, k
 const shop = demoShop(process.env, { publicUrl: `${publicUrl}/shop`, db: join(dirname(env("HUDDLE_DB") ?? "huddle.db"), "shop.db") });
 const shopUrl = shop ? `${publicUrl}/shop` : undefined;
 const asker = justAsk ? new Asker(store, engine, router, justAsk, { shop: shopUrl }) : undefined;
+const auditPayPal = PayPal.fromEnv(process.env);
+const auditor = auditPayPal
+  ? new Auditor(store, auditPayPal, { merchant: shop?.name, ...(llmUrl && fillModel ? { writer: disputeWriter({ url: llmUrl, model: fillModel, key: llmKey, fetcher: meter.fetchFor("audit") }) } : {}) })
+  : undefined;
 const app = createApp({
   store,
   engine,
@@ -223,7 +228,14 @@ const app = createApp({
   tidy: llmUrl && fillModel ? (notes) => tidyMemory(notes, { model: { url: llmUrl, model: fillModel, key: llmKey }, fetcher: meter.fetchFor("tidy up") }) : undefined,
   ...(shopUrl ? { shop: shopUrl } : {}),
   limits: llmUrl && fillModel ? limitsWriter({ url: llmUrl, model: fillModel, key: llmKey, fetcher: meter.fetchFor("allowance") }) : undefined,
+  auditor,
 });
+// The auditor checks PayPal's record against what was signed: soon after starting, then every 10 minutes.
+if (auditor) {
+  const check = () => void auditor.run().catch((error: unknown) => console.error("[huddle] audit:", error instanceof Error ? error.message : error));
+  setTimeout(check, 20_000).unref();
+  setInterval(check, 10 * 60_000).unref();
+}
 if (shop) {
   app.get("/shop/", (c) => c.redirect("/shop", 308));
   app.route("/shop", shop.app);

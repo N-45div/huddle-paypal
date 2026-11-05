@@ -43,7 +43,12 @@ export interface Info {
   readonly shop: string | null;
   /** Whether an allowance can be written from your words (a model is set up). */
   readonly allowanceWords: boolean;
+  /** Whether the auditor checks PayPal's record of the shop's charges (PayPal is set up). */
+  readonly auditor: boolean;
 }
+
+/** GET /api/audit: each PayPal charge, checked against what your boards signed, with a dispute drafted for any flagged. */
+export type { AuditView } from "./auditor.ts";
 
 /**
  * An allowance: your board said once that Huddle may pay at a shop on its own, within these limits, until it ends.
@@ -325,6 +330,8 @@ export interface SandboxRequests {
  *   POST   /api/signs/:id { signature, key } -> 202 { runId }    (a board's signature of a payment, raw P-256 r||s and key, base64url)
  *                                           -> SignView          (of a link: result.approveUrl is PayPal's page to open next)
  *   POST   /api/links { shop, key }        -> 201 SignView        (links a board at a shop: the shop's text for it to sign)
+ *   GET    /api/audit                      -> AuditView           (each PayPal charge checked against what was signed; flagged ones with a dispute)
+ *   POST   /api/audit                      -> AuditView           (checks now)
  *   GET    /api/allowances                 -> AllowanceView[]     (yours, newest first, with what's been spent under each)
  *   POST   /api/allowances { said } | { for, each, total, per, days }, shop?, key? -> 201 AllowanceView  (for your board to sign)
  *   POST   /api/allowances/:id/stop        -> AllowanceView       (Huddle pays nothing more under it, and tells the shop)

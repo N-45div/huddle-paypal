@@ -75,6 +75,7 @@ describe("the API", () => {
       justAsk: false,
       shop: null,
       allowanceWords: false,
+      auditor: false,
     });
     assert.equal((await app.request("/.well-known/agent-card.json")).status, 200);
   });

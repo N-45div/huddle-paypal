@@ -1,3 +1,4 @@
+import type { Finding } from "./audit.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
@@ -115,7 +116,8 @@ export type Change =
   | { readonly kind: "devices" }
   | { readonly kind: "signin" }
   /** Something waiting for a board's signature came or went, or a board was added. */
-  | { readonly kind: "sign"; readonly runId: string | null };
+  | { readonly kind: "sign"; readonly runId: string | null }
+  | { readonly kind: "audit" };
 
 /** A gadget of yours (the Huddle button) that shows what's waiting for you and takes your yes or no. */
 export interface Device {
@@ -212,6 +214,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS spend (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, step_id TEXT NOT NULL, flow_id TEXT, flow_name TEXT NOT NULL, assistant TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL, cost_usd REAL, estimated INTEGER NOT NULL, saved_usd REAL, saved_by TEXT, at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS answers (key TEXT PRIMARY KEY, assistant TEXT NOT NULL, run_id TEXT NOT NULL, text TEXT NOT NULL, data TEXT NOT NULL, cost_usd REAL, expires_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS signers (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, name TEXT NOT NULL, device_id TEXT UNIQUE, created_at TEXT NOT NULL, last_signed_at TEXT);
+      CREATE TABLE IF NOT EXISTS audits (capture_id TEXT PRIMARY KEY, verdict TEXT NOT NULL, why TEXT NOT NULL, sign_id TEXT, order_id TEXT, invoice_id TEXT, amount TEXT NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL, at TEXT NOT NULL, draft TEXT, checked_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS signs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, run_id TEXT, step_id TEXT, shop TEXT NOT NULL, expires TEXT NOT NULL, signature TEXT, key TEXT, result TEXT, error TEXT, created_at TEXT NOT NULL, signed_at TEXT);
       CREATE INDEX IF NOT EXISTS spend_at ON spend (at);
       CREATE INDEX IF NOT EXISTS spend_assistant ON spend (assistant, seq);
@@ -603,6 +606,44 @@ export class Store {
     const moved = Number(result.changes) === 1;
     if (moved) this.changed({ kind: "sign", runId: this.signRequest(id)?.runId ?? null });
     return moved;
+  }
+
+  // The auditor's findings: each PayPal charge, and whether a board (or an allowance) signed it ---------
+
+  /** Keeps what the auditor found for a charge; a dispute drafted for it earlier is kept unless a new one's given. */
+  saveFinding(finding: Finding, draft?: string): void {
+    const { charge } = finding;
+    this.db
+      .prepare(
+        `INSERT INTO audits (capture_id, verdict, why, sign_id, order_id, invoice_id, amount, currency, status, at, draft, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (capture_id) DO UPDATE SET verdict = excluded.verdict, why = excluded.why, sign_id = excluded.sign_id, order_id = COALESCE(excluded.order_id, order_id), invoice_id = excluded.invoice_id, amount = excluded.amount, currency = excluded.currency, status = excluded.status, at = excluded.at, draft = COALESCE(excluded.draft, draft), checked_at = excluded.checked_at`,
+      )
+      .run(charge.captureId, finding.verdict, finding.why, finding.signId, charge.orderId, charge.invoiceId, charge.amount, charge.currency, charge.status, charge.at, draft ?? null, now());
+  }
+
+  /** What the auditor found, newest charge first, each with the dispute drafted for it, if any. */
+  findings(limit = 200): (Finding & { readonly draft: string | null; readonly checkedAt: string })[] {
+    return (this.db.prepare("SELECT * FROM audits ORDER BY at DESC LIMIT ?").all(limit) as Row[]).map((row) => ({
+      charge: {
+        captureId: String(row.capture_id),
+        orderId: row.order_id == null ? null : String(row.order_id),
+        invoiceId: row.invoice_id == null ? null : String(row.invoice_id),
+        amount: String(row.amount),
+        currency: String(row.currency),
+        status: String(row.status),
+        at: String(row.at),
+      },
+      verdict: String(row.verdict) as Finding["verdict"],
+      why: String(row.why),
+      signId: row.sign_id == null ? null : String(row.sign_id),
+      draft: row.draft == null ? null : String(row.draft),
+      checkedAt: String(row.checked_at),
+    }));
+  }
+
+  /** Says the auditor finished a check, for whoever shows its findings. */
+  audited(): void {
+    this.changed({ kind: "audit" });
   }
 
   // Memory -----------------------------------------------------------------------------------------
