@@ -133,7 +133,10 @@ export class Auditor {
     }
     const known = new Map(this.store.findings().map((finding) => [finding.charge.captureId, finding]));
     for (const finding of audit(this.store, charges)) {
-      const draft = flagged(finding) && !known.get(finding.charge.captureId)?.draft ? await this.writer({ merchant: this.merchant, finding }) : undefined;
+      // A flagged charge gets a dispute; one that only got the template (the model was out) is drafted again.
+      const facts = { merchant: this.merchant, finding };
+      const drafted = known.get(finding.charge.captureId)?.draft;
+      const draft = flagged(finding) && (!drafted || drafted === disputeTemplate(facts)) ? await this.writer(facts) : undefined;
       this.store.saveFinding(finding, draft);
     }
     this.store.saveSetting("audit.checked_at", new Date().toISOString());
