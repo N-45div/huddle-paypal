@@ -7,6 +7,7 @@ import { ago, fullTime } from "../format.ts";
 import { useResource } from "../hooks.ts";
 import { href } from "../router.ts";
 import { AllowancesCard } from "./AllowancesCard.tsx";
+import { AuditCard } from "./AuditCard.tsx";
 import { cents, itemsLine, linkedShops, money, paymentOf, paymentState, spentSince, startOfMonth, startOfWeek, type WalletPayment } from "../wallet.ts";
 
 type Filter = "all" | "paid" | "open" | "not";
@@ -126,6 +127,8 @@ export function WalletScreen() {
       </section>
 
       <AllowancesCard />
+
+      <AuditCard />
 
       <section aria-labelledby="wallet-payments">
         <div className="wallet-payments-head">

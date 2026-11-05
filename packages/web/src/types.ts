@@ -39,6 +39,7 @@ export type {
   RunView,
   SignIn,
   AllowanceView,
+  AuditView,
   BoughtView,
   FoundView,
   SignerView,

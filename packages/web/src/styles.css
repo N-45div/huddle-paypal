@@ -4696,3 +4696,51 @@ h1 .badge {
   background: var(--accent);
   border-radius: inherit;
 }
+
+/* The auditor: PayPal's charges, checked against what was signed. */
+.audit-summary {
+  margin: 10px 0 12px;
+  border-left: 4px solid var(--ok);
+}
+
+.audit-summary.audit-bad {
+  border-left-color: var(--danger);
+}
+
+.audit-headline {
+  margin: 0 0 4px;
+  font-weight: 650;
+}
+
+.audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.audit-flag {
+  border-left: 4px solid var(--danger);
+}
+
+.audit-flag-head {
+  margin: 0 0 4px;
+}
+
+.audit-draft {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.audit-fine summary {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
